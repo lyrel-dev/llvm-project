@@ -16,11 +16,11 @@ commented out, not guarded by notes):
 
 The approach is **top-down iterative**:
 
-1. Start from the top-level parser entry (`ParseAST.h` / `ParseAST.cpp`) and
-   the main parser class (`Parser.h` / `Parser.cpp`).
-2. Remove dead source files entirely once their declarations are gone.
-3. Work through all remaining parse files, removing dead branches.
-4. Verify the build is clean after each commit.
+1. Start from the top-level parser entry (`ParseAST.h` / `ParseAST.cpp`).
+2. Proceed to the main parser class (`Parser.h` / `Parser.cpp`).
+3. Delete dead source files entirely once their declarations are gone.
+4. Work through remaining parse files, removing dead branches.
+5. Verify the build is clean after each commit.
 
 ---
 
@@ -34,33 +34,31 @@ The approach is **top-down iterative**:
 
 ---
 
-## Commit 0 — Baseline (already merged)
+## Commit 0 — `ParseAST.h` + `ParseAST.cpp`
 
-Preliminary groundwork from the previous session:
+**Files:** `clang/include/clang/Parse/ParseAST.h`,
+`clang/lib/Parse/ParseAST.cpp`
 
-- ✅ `DiagnosticFrontendKinds.td` — new `err_fe_unsupported_input_language`
-- ✅ `LangStandards.def` — removed all OpenCL and HLSL standard entries
-- ✅ `LangStandards.cpp` — stubbed `getHLSLLangKind()`; unreachable paths for ObjC/OpenCL/HLSL in `getDefaultLanguageStandard()`
-- ✅ `LangOptions.cpp` — removed HLSL/OpenCL/CUDA/HIP/ObjC blocks from `setLangDefaults()`
-- ✅ `CompilerInvocation.cpp` — early rejection of non-C/C++ languages; removed all dead HLSL/HIP/ObjC/OpenCL/OpenACC post-parse setup
-- ✅ `FrontendOptions.cpp` — removed non-C/C++ file extension mappings
-- ✅ Dead-code notices on `ParseObjc.cpp`, `ParseOpenMP.cpp`, `ParseOpenACC.cpp`, `ParseHLSL.cpp`, `ParseHLSLRootSignature.cpp`, `LexHLSLRootSignature.cpp`
+These files are the top-level entry point to the parser. They contain no
+ObjC, OpenMP, OpenACC, HLSL, or CUDA/HIP code. No changes required.
+
+**Status:** ✅ Clean — no modifications needed
 
 ---
 
-## Commit 1 — `Parser.h` + `Parser.cpp`
+## Commit 1 — `Parser.h`
 
-**Files:** `clang/include/clang/Parse/Parser.h`, `clang/lib/Parse/Parser.cpp`
+**File:** `clang/include/clang/Parse/Parser.h`
 
-### Parser.h — Removals
+### Includes removed (4)
 
-**Includes (4 lines):**
 - `#include "clang/Basic/OpenACCKinds.h"`
 - `#include "clang/Sema/SemaObjC.h"`
 - `#include "clang/Sema/SemaOpenMP.h"`
 - `#include "llvm/Frontend/OpenMP/OMPContext.h"`
 
-**Forward declarations (8 lines):**
+### Forward declarations removed (8)
+
 - `class InMessageExpressionRAIIObject;`
 - `class OMPClause;`
 - `class OpenACCClause;`
@@ -70,177 +68,231 @@ Preliminary groundwork from the previous session:
 - `struct OMPTraitSet;`
 - `class OMPTraitInfo;`
 
-**Enum (12 lines):**
+### Enum removed
+
 - `enum class ObjCTypeQual { ... }` (lines 91–102)
 
-**Table of Contents entries (4 lines):**
+### Table of Contents entries removed (4)
+
 - `// 7. HLSL Constructs (ParseHLSL.cpp)`
 - `// 9. Objective-C Constructs (ParseObjc.cpp)`
 - `// 10. OpenACC Constructs (ParseOpenACC.cpp)`
 - `// 11. OpenMP Constructs (ParseOpenMP.cpp)`
 
-**Scattered inline methods / declarations (~10 lines):**
-- `bool isHLSLQualifier(const Token &Tok) const;` (line 2332)
-- `void ParseHLSLQualifiers(ParsedAttributes &Attrs);` (line 2333)
-- `void ParseCUDAFunctionAttributes(ParsedAttributes &attrs);` (line 2331)
-- `void ParseOpenMPAttributeArgs(...)` (line 2978)
-- `void ParseHLSLRootSignatureAttributeArgs(...)` (line 3608)
-- `bool tryParseOpenMPArrayShapingCastPart();` (line 4375)
+### Scattered declarations removed
 
-**Complete sections (≈1,700 lines):**
-- HLSL section (lines ~5190–5232)
-- Objective-C section (lines ~5348–6054)
-- OpenACC section (lines ~6062–6322)
-- OpenMP section (lines ~6330–7020)
+- `void ParseCUDAFunctionAttributes(ParsedAttributes &attrs);`
+- `bool isHLSLQualifier(const Token &Tok) const;`
+- `void ParseHLSLQualifiers(ParsedAttributes &Attrs);`
+- `void ParseObjCBridgeRelatedAttribute(...);`
+- `void ParseOpenMPAttributeArgs(...);`
+- `void ParseHLSLRootSignatureAttributeArgs(...);`
+- `bool tryParseOpenMPArrayShapingCastPart();`
+- `ExprResult ParseObjCBoolLiteral();`
+- `ExprResult ParseAssignmentExprWithObjCMessageExprStart(...);`
+- OpenMP token replay helpers in `ParseCXX11AttributeSpecifier`
 
-**Member variables:**
-- `InMessageExpression`, `ParsingInObjCContainer`, `CurParsedObjCImpl`
-- `ObjCTypeQuals[]`, `Ident_instancetype`, `Ident_super`
-- `OpenMPDirectiveParsing`, `OMPClauseKind`
-- `OpenACCDirectiveParsing`, `AllowOpenACCArraySections`
-- `OpenMPHandler`, `OpenACCHandler`, `CUDAForceHostDeviceHandler`
+### `ParsedStmtContext` enum — removed value
 
-**Friend declarations:**
-- `friend class InMessageExpressionRAIIObject;`
-- `friend class ObjCDeclContextSwitch;`
-- `friend class ParsingOpenACCDirectiveRAII;`
-- `friend class ParsingOpenMPDirectiveRAII;`
+- `AllowStandaloneOpenMPDirectives = 0x2`
+- Updated `Compound` value to not include OpenMP flag
 
-### Parser.cpp — Removals
+### DSC enum — removed value
 
-**Constructor `Parser::Parser()`:**
-- Remove `InMessageExpression(false)`, `ParsingInObjCContainer(false)` from init list
-- Remove `CurParsedObjCImpl = nullptr;`
-- Remove ObjCTypeQuals initialization block (`if (getLangOpts().ObjC) { ... }`)
+- `DSC_objc_method_result` from `DeclSpecContext`
 
-**`Parser::Initialize()`:**
-- Remove `if (getLangOpts().OpenMP) Actions.OpenMP().startOpenMPLoop();`
+### Pragma member variables removed
 
-**`skipUntilPragmaHarmless()` / similar:**
-- Remove `if (OpenMPDirectiveParsing) ...`
-- Remove `if (OpenACCDirectiveParsing) ...`
+- `std::unique_ptr<PragmaHandler> OpenMPHandler;`
+- `std::unique_ptr<PragmaHandler> OpenACCHandler;`
+- `std::unique_ptr<PragmaHandler> CUDAForceHostDeviceHandler;`
 
-**`ParseExternalDeclaration()`:**
-- Remove `ParseOpenMPDeclarativeDirectiveWithExtDecl(...)` branch
-- Remove `ParseOpenACCDirectiveDecl(...)` branch
-- Remove `ParseObjCAtDirectives(...)` branch
-- Remove HLSL `export` block (`if (getLangOpts().HLSL) ...`)
-- Remove ObjC `@` keyword branches
-- Remove ObjC method definition handling (`if (CurParsedObjCImpl) ...`)
+### Whole sections deleted (~1,900 lines)
 
-**`ParseDeclarationOrFunctionDefinition()` and related:**
-- Remove `ObjCDeclContextSwitch` usage
-- Remove ObjC-specific type annotation calls
+- **HLSL Constructs** section (`\name HLSL Constructs`, lines ~5194–5232)
+- **Objective-C Constructs** section (`\name Objective-C Constructs`, lines ~5348–6054)
+- **OpenACC Constructs** section (`\name OpenACC Constructs`, lines ~6062–6322)
+- **OpenMP Constructs** section (`\name OpenMP Constructs`, lines ~6330–7020)
 
-**`ParseModuleImport()`:**
-- Remove `IsObjCAtImport` branch
-
-**Status:** ⬜
+**Status:** ✅
 
 ---
 
-## Commit 2 — `ParsePragma.cpp`
+## Commit 2 — `Parser.cpp`
 
-**File:** `clang/lib/Parse/ParsePragma.cpp`
+**File:** `clang/lib/Parse/Parser.cpp`
 
-**Removals:**
-- `#include "clang/Sema/SemaCUDA.h"` include
-- `struct PragmaNoOpenMPHandler` and `struct PragmaNoOpenACCHandler`
-- `struct PragmaOpenMPHandler` and `struct PragmaOpenACCHandler`
-- `struct PragmaForceCUDAHostDeviceHandler` and its `HandlePragma()` impl
-- `void PragmaNSReturnNotOwned::HandlePragma()` (ObjC) if present
-- In `initializePragmaHandlers()`: remove OpenMP, OpenACC, CUDA handler registration
-- In `resetPragmaHandlers()`: remove OpenMP, OpenACC, CUDA handler removal
-- `HandlePragmaNoSupport()` stubs for omp/acc
-- All OpenMP pragma comment handlers (`HandlePragma` impl for OpenMP)
-- All OpenACC pragma comment handlers
-- CUDA `#pragma unroll` special case
+### Constructor `Parser::Parser()` — removals
 
-**Estimated removal:** ~1,500 lines
+- `InMessageExpression(false)` from initializer list
+- `ParsingInObjCContainer(false)` from initializer list
+- `CurParsedObjCImpl = nullptr;`
+- ObjC type quals initialization block (`if (getLangOpts().ObjC) { ... }`)
 
-**Status:** ⬜
+### `Parser::Initialize()` — removal
+
+- `if (getLangOpts().OpenMP) Actions.OpenMP().startOpenMPLoop();`
+
+### `skipUntilPragmaHarmless()` — removals
+
+- `if (OpenMPDirectiveParsing) ...` block
+- `if (OpenACCDirectiveParsing) ...` block
+
+### `ParseExternalDeclaration()` — removals
+
+- `ParseOpenMPDeclarativeDirectiveWithExtDecl(...)` branch
+- `ParseOpenACCDirectiveDecl(...)` branch
+- `ParseObjCAtDirectives(...)` branch
+- HLSL `export` block (`if (getLangOpts().HLSL) ...`)
+- ObjC `@` keyword branches
+- ObjC method definition handling (`if (CurParsedObjCImpl) ...`)
+
+### `ParseDeclarationOrFunctionDefinition()` — removals
+
+- `ObjCDeclContextSwitch` usage
+- ObjC type annotation calls
+
+### `ParseModuleImport()` — removal
+
+- `IsObjCAtImport` branch
+
+### Type annotation helpers — removals
+
+- ObjC type args handling blocks in `ParseOptionalCXXScopeSpecifier`
+
+**Status:** ✅
 
 ---
 
-## Commit 3 — Delete dead source files + CMakeLists update
+## Commit 3 — Delete dead source files + CMakeLists.txt
 
 **Files deleted:**
-- `clang/lib/Parse/ParseObjc.cpp` (3,340 lines)
-- `clang/lib/Parse/ParseOpenMP.cpp` (5,406 lines)
-- `clang/lib/Parse/ParseOpenACC.cpp` (1,700 lines)
-- `clang/lib/Parse/ParseHLSL.cpp` (348 lines)
-- `clang/lib/Parse/ParseHLSLRootSignature.cpp` (1,589 lines)
+
+- `clang/lib/Parse/ParseObjc.cpp` (~3,340 lines)
+- `clang/lib/Parse/ParseOpenMP.cpp` (~5,406 lines)
+- `clang/lib/Parse/ParseOpenACC.cpp` (~1,700 lines)
+- `clang/lib/Parse/ParseHLSL.cpp` (~348 lines)
+- `clang/lib/Parse/ParseHLSLRootSignature.cpp` (~1,589 lines)
 - `clang/include/clang/Parse/ParseHLSLRootSignature.h`
 
-**CMakeLists.txt update:**
+**`clang/lib/Parse/CMakeLists.txt` changes:**
+
 - Remove `ParseObjc.cpp`, `ParseOpenMP.cpp`, `ParseOpenACC.cpp`,
   `ParseHLSL.cpp`, `ParseHLSLRootSignature.cpp` from source list
 - Remove `FrontendHLSL` and `FrontendOpenMP` from `LLVM_LINK_COMPONENTS`
 - Remove `omp_gen` from `DEPENDS`
 
-**Estimated removal:** ~12,383 lines
+**Estimated removal:** ~12,400+ lines
+
+**Status:** ✅
+
+---
+
+## Commit 4 — `ParsePragma.cpp`
+
+**File:** `clang/lib/Parse/ParsePragma.cpp`
+
+### Includes removed
+
+- `#include "clang/Sema/SemaCUDA.h"`
+
+### Struct/handler definitions deleted
+
+- `struct PragmaOpenMPHandler` + `HandlePragma()` impl
+- `struct PragmaNoOpenMPHandler` + `HandlePragma()` impl
+- `struct PragmaOpenACCHandler` + `HandlePragma()` impl
+- `struct PragmaNoOpenACCHandler` + `HandlePragma()` impl
+- `struct PragmaForceCUDAHostDeviceHandler` + `HandlePragma()` impl
+
+### `initializePragmaHandlers()` — removals
+
+- OpenMP handler registration
+- OpenACC handler registration
+- CUDA force-host-device handler registration
+
+### `resetPragmaHandlers()` — removals
+
+- OpenMP handler removal
+- OpenACC handler removal
+- CUDA handler removal
+
+### OpenMP pragma handling deleted
+
+- All `HandlePragma` impl for `annot_pragma_openmp`
+
+### OpenACC pragma handling deleted
+
+- All `HandlePragma` impl for `annot_pragma_openacc`
 
 **Status:** ⬜
 
 ---
 
-## Commit 4 — `ParseDecl.cpp`
+## Commit 5 — `ParseDecl.cpp`
 
 **File:** `clang/lib/Parse/ParseDecl.cpp`
 
-**Expected removals:**
+### Expected removals
+
 - All `if (getLangOpts().ObjC)` guarded blocks
-- `ParseObjCBridgeRelatedAttribute()` invocations
-- HLSL qualifier parsing (`isHLSLQualifier`, `ParseHLSLQualifiers`)
+- `ParseObjCBridgeRelatedAttribute()` call sites and implementation
+- `isHLSLQualifier()` + `ParseHLSLQualifiers()` call sites
 - `ParseCUDAFunctionAttributes()` call sites
 - OpenMP `threadprivate` / `allocate` directive handling
-- `DSC_objc_method_result` switch cases in `DeclSpecContext`
+- `DSC_objc_method_result` switch cases
 
 **Status:** ⬜
 
 ---
 
-## Commit 5 — `ParseDeclCXX.cpp`
+## Commit 6 — `ParseDeclCXX.cpp`
 
 **File:** `clang/lib/Parse/ParseDeclCXX.cpp`
 
-**Expected removals:**
+### Expected removals
+
 - HLSL `export` declaration parsing
 - OpenMP `declare` directive branches
 - ObjC `@` handling in class context
+- CUDA attribute handling
 
 **Status:** ⬜
 
 ---
 
-## Commit 6 — `ParseStmt.cpp`
+## Commit 7 — `ParseStmt.cpp`
 
 **File:** `clang/lib/Parse/ParseStmt.cpp`
 
-**Expected removals:**
+### Expected removals
+
 - `ParseObjCAtStatement()` call site and ObjC statement branches
 - `ParseOpenMPDeclarativeOrExecutableDirective()` call sites
 - `ParseOpenACCDirectiveStmt()` call sites
-- OpenMP `annot_pragma_openmp` token handling
-- OpenACC `annot_pragma_openacc` token handling
+- `annot_pragma_openmp` token handling
+- `annot_pragma_openacc` token handling
 - ObjC try/catch/throw/synchronized statement branches
+- `AllowStandaloneOpenMPDirectives` references in `ParsedStmtContext`
 
 **Status:** ⬜
 
 ---
 
-## Commit 7 — `ParseExpr.cpp` + `ParseExprCXX.cpp`
+## Commit 8 — `ParseExpr.cpp` + `ParseExprCXX.cpp`
 
-**Files:** `clang/lib/Parse/ParseExpr.cpp`, `clang/lib/Parse/ParseExprCXX.cpp`
+**Files:** `clang/lib/Parse/ParseExpr.cpp`,
+`clang/lib/Parse/ParseExprCXX.cpp`
 
-**Expected removals (ParseExpr.cpp):**
-- `ParseObjCBoolLiteral()` call site
+### `ParseExpr.cpp` removals
+
+- `ParseObjCBoolLiteral()` definition
 - ObjC message expression branches (`[`, `@selector`, `@string`)
-- `ParseAssignmentExprWithObjCMessageExprStart()` call sites
-- `tryParseOpenMPArrayShapingCastPart()` call sites
+- `ParseAssignmentExprWithObjCMessageExprStart()` definition and call sites
+- `tryParseOpenMPArrayShapingCastPart()` definition and call sites
 - OpenMP array shaping expression handling
 
-**Expected removals (ParseExprCXX.cpp):**
+### `ParseExprCXX.cpp` removals
+
 - ObjC generics `<` parsing (`parseObjCTypeArgsOrProtocolQualifiers`)
 - HLSL-specific expression handling
 
@@ -248,25 +300,24 @@ Preliminary groundwork from the previous session:
 
 ---
 
-## Commit 8 — Remaining parse files
+## Commit 9 — Remaining parse files
 
 **Files:** `ParseTemplate.cpp`, `ParseTentative.cpp`, `ParseInit.cpp`,
 `ParseStmtAsm.cpp`, `ParseCXXInlineMethods.cpp`
 
-**Expected removals:**
-- Any OpenMP/ObjC/HLSL conditional branches in these files
+### Expected removals
+
+- Any OpenMP / ObjC / HLSL / CUDA / OpenACC conditional branches in these files
 
 **Status:** ⬜
 
 ---
 
-## Commit 9 — Final build verification + document update
+## Commit 10 — Final build verification + document update
 
-- Rebuild all affected libraries: `clangBasic`, `clangLex`, `clangParse`,
-  `clangFrontend`, `clangSema`
-- Confirm zero errors, zero warnings
+- Rebuild: `clangBasic`, `clangLex`, `clangParse`, `clangFrontend`, `clangSema`
+- Confirm zero errors, zero warnings related to removals
 - Update this document to mark all items ✅
-- Update `ReducedParser.md` to reflect actual deletions
 
 **Status:** ⬜
 
@@ -276,20 +327,19 @@ Preliminary groundwork from the previous session:
 
 | Metric | Value |
 |--------|-------|
-| Files to fully delete | 5 parse files + 1 header |
-| Estimated total lines removed | ~15,000+ lines |
-| Libraries rebuilt clean | TBD |
+| Files to fully delete | 5 `.cpp` + 1 `.h` |
+| Dead language lines removed (files deleted) | ~12,400 |
+| Dead language lines removed (in-place) | ~3,000+ |
+| Total estimated removal | ~15,400+ lines |
 
 ---
 
-## Notes
+## Rules
 
 - **Never add comments where code is removed** — just delete the code.
 - **Never leave empty files** — delete them entirely.
 - **Rebuild after each commit** to catch breakage early.
-- ObjC `@` handling in `ParseModuleImport()` can remain only if it is
-  genuinely needed for C++ module imports (it is not — remove it).
-- `DSC_objc_method_result` in `DeclSpecContext` can be removed only once
-  all call sites in `ParseDecl.cpp` are removed first.
-- CUDA `#pragma unroll` special case in `ParsePragma.cpp` (line ~3830) can
-  be simplified to drop the `PP.getLangOpts().CUDA` condition.
+- Dead code = any code path reachable only when
+  `getLangOpts().ObjC`, `getLangOpts().OpenMP`,
+  `getLangOpts().OpenACC`, `getLangOpts().HLSL`,
+  `getLangOpts().CUDA`, or `getLangOpts().HIP` is true.

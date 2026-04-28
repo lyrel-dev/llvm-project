@@ -1,6 +1,4 @@
 set(LLVM_LINK_COMPONENTS
-  FrontendHLSL
-  FrontendOpenMP
   MC
   MCParser
   Support
@@ -14,18 +12,13 @@ add_clang_library(clangParse
   ParseDeclCXX.cpp
   ParseExpr.cpp
   ParseExprCXX.cpp
-  ParseHLSL.cpp
-  ParseHLSLRootSignature.cpp
   ParseInit.cpp
-  ParseObjc.cpp
-  ParseOpenMP.cpp
   ParsePragma.cpp
   ParseStmt.cpp
   ParseStmtAsm.cpp
   ParseTemplate.cpp
   ParseTentative.cpp
   Parser.cpp
-  ParseOpenACC.cpp
   ParseReflect.cpp
 
   LINK_LIBS
@@ -35,6 +28,5 @@ add_clang_library(clangParse
   clangSema
 
   DEPENDS
-  omp_gen
   ClangDriverOptions
   )

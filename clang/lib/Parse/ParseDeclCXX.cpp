@@ -4287,69 +4287,6 @@ IdentifierInfo *Parser::TryParseCXX11AttributeIdentifier(
   }
 }
 
-void Parser::ParseOpenMPAttributeArgs(const IdentifierInfo *AttrName,
-                                      CachedTokens &OpenMPTokens) {
-  // Both 'sequence' and 'directive' attributes require arguments, so parse the
-  // open paren for the argument list.
-  BalancedDelimiterTracker T(*this, tok::l_paren);
-  if (T.consumeOpen()) {
-    Diag(Tok, diag::err_expected) << tok::l_paren;
-    return;
-  }
-
-  if (AttrName->isStr("directive")) {
-    // If the attribute is named `directive`, we can consume its argument list
-    // and push the tokens from it into the cached token stream for a new OpenMP
-    // pragma directive.
-    Token OMPBeginTok;
-    OMPBeginTok.startToken();
-    OMPBeginTok.setKind(tok::annot_attr_openmp);
-    OMPBeginTok.setLocation(Tok.getLocation());
-    OpenMPTokens.push_back(OMPBeginTok);
-
-    ConsumeAndStoreUntil(tok::r_paren, OpenMPTokens, /*StopAtSemi=*/false,
-                         /*ConsumeFinalToken*/ false);
-    Token OMPEndTok;
-    OMPEndTok.startToken();
-    OMPEndTok.setKind(tok::annot_pragma_openmp_end);
-    OMPEndTok.setLocation(Tok.getLocation());
-    OpenMPTokens.push_back(OMPEndTok);
-  } else {
-    assert(AttrName->isStr("sequence") &&
-           "Expected either 'directive' or 'sequence'");
-    // If the attribute is named 'sequence', its argument is a list of one or
-    // more OpenMP attributes (either 'omp::directive' or 'omp::sequence',
-    // where the 'omp::' is optional).
-    do {
-      // We expect to see one of the following:
-      //  * An identifier (omp) for the attribute namespace followed by ::
-      //  * An identifier (directive) or an identifier (sequence).
-      SourceLocation IdentLoc;
-      const IdentifierInfo *Ident = TryParseCXX11AttributeIdentifier(IdentLoc);
-
-      // If there is an identifier and it is 'omp', a double colon is required
-      // followed by the actual identifier we're after.
-      if (Ident && Ident->isStr("omp") && !ExpectAndConsume(tok::coloncolon))
-        Ident = TryParseCXX11AttributeIdentifier(IdentLoc);
-
-      // If we failed to find an identifier (scoped or otherwise), or we found
-      // an unexpected identifier, diagnose.
-      if (!Ident || (!Ident->isStr("directive") && !Ident->isStr("sequence"))) {
-        Diag(Tok.getLocation(), diag::err_expected_sequence_or_directive);
-        SkipUntil(tok::r_paren, StopBeforeMatch);
-        continue;
-      }
-      // We read an identifier. If the identifier is one of the ones we
-      // expected, we can recurse to parse the args.
-      ParseOpenMPAttributeArgs(Ident, OpenMPTokens);
-
-      // There may be a comma to signal that we expect another directive in the
-      // sequence.
-    } while (TryConsumeToken(tok::comma));
-  }
-  // Parse the closing paren for the argument list.
-  T.consumeClose();
-}
 
 static bool IsBuiltInOrStandardCXX11Attribute(IdentifierInfo *AttrName,
                                               IdentifierInfo *ScopeName) {
@@ -4428,7 +4365,7 @@ bool Parser::ParseCXXAssumeAttributeArg(
 bool Parser::ParseCXX11AttributeArgs(
     IdentifierInfo *AttrName, SourceLocation AttrNameLoc,
     ParsedAttributes &Attrs, SourceLocation *EndLoc, IdentifierInfo *ScopeName,
-    SourceLocation ScopeLoc, CachedTokens &OpenMPTokens) {
+    SourceLocation ScopeLoc) {
   assert(Tok.is(tok::l_paren) && "Not a C++11 attribute argument list");
   SourceLocation LParenLoc = Tok.getLocation();
   const LangOptions &LO = getLangOpts();
@@ -4483,20 +4420,6 @@ bool Parser::ParseCXX11AttributeArgs(
     return true;
   }
 
-  // [[omp::directive]] and [[omp::sequence]] need special handling.
-  if (ScopeName && ScopeName->isStr("omp") &&
-      (AttrName->isStr("directive") || AttrName->isStr("sequence"))) {
-    Diag(AttrNameLoc, getLangOpts().OpenMP >= 51
-                          ? diag::warn_omp51_compat_attributes
-                          : diag::ext_omp_attributes);
-
-    ParseOpenMPAttributeArgs(AttrName, OpenMPTokens);
-
-    // We claim that an attribute was parsed and added so that one is not
-    // created for us by the caller.
-    return true;
-  }
-
   unsigned NumArgs;
   // Some Clang-scoped attributes have some special parsing behavior.
   if (ScopeName && (ScopeName->isStr("clang") || ScopeName->isStr("_Clang")))
@@ -4547,7 +4470,6 @@ bool Parser::ParseCXX11AttributeArgs(
 }
 
 void Parser::ParseCXX11AttributeSpecifierInternal(ParsedAttributes &Attrs,
-                                                  CachedTokens &OpenMPTokens,
                                                   SourceLocation *EndLoc) {
   if (Tok.is(tok::kw_alignas)) {
     // alignas is a valid token in C23 but it is not an attribute, it's a type-
@@ -4666,7 +4588,7 @@ void Parser::ParseCXX11AttributeSpecifierInternal(ParsedAttributes &Attrs,
     // Parse attribute arguments
     if (Tok.is(tok::l_paren))
       AttrParsed = ParseCXX11AttributeArgs(AttrName, AttrLoc, Attrs, EndLoc,
-                                           ScopeName, ScopeLoc, OpenMPTokens);
+                                           ScopeName, ScopeLoc);
 
     if (!AttrParsed) {
       Attrs.addNew(AttrName,
@@ -4943,11 +4865,9 @@ void Parser::ParseMicrosoftAttributes(ParsedAttributes &Attrs) {
         if (getLangOpts().HLSL || AttrKind != ParsedAttr::UnknownAttribute) {
           bool AttrParsed = false;
           if (Tok.is(tok::l_paren)) {
-            CachedTokens OpenMPTokens;
             AttrParsed =
                 ParseCXX11AttributeArgs(II, NameLoc, Attrs, &EndLoc, nullptr,
-                                        SourceLocation(), OpenMPTokens);
-            ReplayOpenMPAttributeTokens(OpenMPTokens);
+                                        SourceLocation());
           }
           if (!AttrParsed) {
             Attrs.addNew(II, NameLoc, AttributeScopeInfo(), nullptr, 0,

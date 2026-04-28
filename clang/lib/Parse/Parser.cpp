@@ -61,14 +61,12 @@ Parser::Parser(Preprocessor &pp, Sema &actions, bool skipFunctionBodies)
       PreferredType(&actions.getASTContext(), pp.isCodeCompletionEnabled()),
       Actions(actions), Diags(PP.getDiagnostics()), StackHandler(Diags),
       GreaterThanIsOperator(true), ColonIsSacred(false),
-      InMessageExpression(false), ParsingInObjCContainer(false),
       TemplateParameterDepth(0) {
   SkipFunctionBodies = pp.isCodeCompletionEnabled() || skipFunctionBodies;
   Tok.startToken();
   Tok.setKind(tok::eof);
   Actions.CurScope = nullptr;
   NumCachedScopes = 0;
-  CurParsedObjCImpl = nullptr;
 
   // Add #pragma handlers. These are removed and destroyed in the
   // destructor.
@@ -328,16 +326,8 @@ bool Parser::SkipUntil(ArrayRef<tok::TokenKind> Toks, SkipUntilFlags Flags) {
     case tok::annot_pragma_openmp:
     case tok::annot_attr_openmp:
     case tok::annot_pragma_openmp_end:
-      // Stop before an OpenMP pragma boundary.
-      if (OpenMPDirectiveParsing)
-        return false;
-      ConsumeAnnotationToken();
-      break;
     case tok::annot_pragma_openacc:
     case tok::annot_pragma_openacc_end:
-      // Stop before an OpenACC pragma boundary.
-      if (OpenACCDirectiveParsing)
-        return false;
       ConsumeAnnotationToken();
       break;
     case tok::annot_module_begin:
@@ -494,37 +484,11 @@ void Parser::Initialize() {
   EnterScope(Scope::DeclScope);
   Actions.ActOnTranslationUnitScope(getCurScope());
 
-  // Initialization for Objective-C context sensitive keywords recognition.
-  // Referenced in Parser::ParseObjCTypeQualifierList.
-  if (getLangOpts().ObjC) {
-    ObjCTypeQuals[llvm::to_underlying(ObjCTypeQual::in)] =
-        &PP.getIdentifierTable().get("in");
-    ObjCTypeQuals[llvm::to_underlying(ObjCTypeQual::out)] =
-        &PP.getIdentifierTable().get("out");
-    ObjCTypeQuals[llvm::to_underlying(ObjCTypeQual::inout)] =
-        &PP.getIdentifierTable().get("inout");
-    ObjCTypeQuals[llvm::to_underlying(ObjCTypeQual::oneway)] =
-        &PP.getIdentifierTable().get("oneway");
-    ObjCTypeQuals[llvm::to_underlying(ObjCTypeQual::bycopy)] =
-        &PP.getIdentifierTable().get("bycopy");
-    ObjCTypeQuals[llvm::to_underlying(ObjCTypeQual::byref)] =
-        &PP.getIdentifierTable().get("byref");
-    ObjCTypeQuals[llvm::to_underlying(ObjCTypeQual::nonnull)] =
-        &PP.getIdentifierTable().get("nonnull");
-    ObjCTypeQuals[llvm::to_underlying(ObjCTypeQual::nullable)] =
-        &PP.getIdentifierTable().get("nullable");
-    ObjCTypeQuals[llvm::to_underlying(ObjCTypeQual::null_unspecified)] =
-        &PP.getIdentifierTable().get("null_unspecified");
-  }
-
-  Ident_instancetype = nullptr;
   Ident_final = nullptr;
   Ident_sealed = nullptr;
   Ident_abstract = nullptr;
   Ident_override = nullptr;
   Ident_GNU_final = nullptr;
-
-  Ident_super = &PP.getIdentifierTable().get("super");
 
   Ident_vector = nullptr;
   Ident_bool = nullptr;
@@ -784,15 +748,10 @@ Parser::ParseExternalDeclaration(ParsedAttributes &Attrs,
     HandlePragmaOpenCLExtension();
     return nullptr;
   case tok::annot_attr_openmp:
-  case tok::annot_pragma_openmp: {
-    AccessSpecifier AS = AS_none;
-    return ParseOpenMPDeclarativeDirectiveWithExtDecl(AS, Attrs);
-  }
-  case tok::annot_pragma_openacc: {
-    AccessSpecifier AS = AS_none;
-    return ParseOpenACCDirectiveDecl(AS, Attrs, DeclSpec::TST_unspecified,
-                                     /*TagDecl=*/nullptr);
-  }
+  case tok::annot_pragma_openmp:
+  case tok::annot_pragma_openacc:
+    ConsumeAnnotationToken();
+    return nullptr;
   case tok::annot_pragma_ms_pointers_to_members:
     HandlePragmaMSPointersToMembers();
     return nullptr;
@@ -856,35 +815,24 @@ Parser::ParseExternalDeclaration(ParsedAttributes &Attrs,
     break;
   }
   case tok::at:
-    return ParseObjCAtDirectives(Attrs, DeclSpecAttrs);
+    Diag(Tok, diag::err_expected_external_declaration);
+    ConsumeToken();
+    return nullptr;
   case tok::minus:
   case tok::plus:
-    if (!getLangOpts().ObjC) {
-      Diag(Tok, diag::err_expected_external_declaration);
-      ConsumeToken();
-      return nullptr;
-    }
-    SingleDecl = ParseObjCMethodDefinition();
-    break;
+    Diag(Tok, diag::err_expected_external_declaration);
+    ConsumeToken();
+    return nullptr;
   case tok::code_completion:
     cutOffParsing();
-    if (CurParsedObjCImpl) {
-      // Code-complete Objective-C methods even without leading '-'/'+' prefix.
-      Actions.CodeCompletion().CodeCompleteObjCMethodDecl(
-          getCurScope(),
-          /*IsInstanceMethod=*/std::nullopt,
-          /*ReturnType=*/nullptr);
+    {
+      SemaCodeCompletion::ParserCompletionContext PCC;
+      if (PP.isIncrementalProcessingEnabled())
+        PCC = SemaCodeCompletion::PCC_TopLevelOrExpression;
+      else
+        PCC = SemaCodeCompletion::PCC_Namespace;
+      Actions.CodeCompletion().CodeCompleteOrdinaryName(getCurScope(), PCC);
     }
-
-    SemaCodeCompletion::ParserCompletionContext PCC;
-    if (CurParsedObjCImpl) {
-      PCC = SemaCodeCompletion::PCC_ObjCImplementation;
-    } else if (PP.isIncrementalProcessingEnabled()) {
-      PCC = SemaCodeCompletion::PCC_TopLevelOrExpression;
-    } else {
-      PCC = SemaCodeCompletion::PCC_Namespace;
-    };
-    Actions.CodeCompletion().CodeCompleteOrdinaryName(getCurScope(), PCC);
     return nullptr;
   case tok::kw_import: {
     Sema::ModuleImportState IS = Sema::ModuleImportState::NotACXX20Module;
@@ -897,7 +845,7 @@ Parser::ParseExternalDeclaration(ParsedAttributes &Attrs,
     SingleDecl = ParseModuleImport(SourceLocation(), IS);
   } break;
   case tok::kw_export:
-    if (getLangOpts().CPlusPlusModules || getLangOpts().HLSL) {
+    if (getLangOpts().CPlusPlusModules) {
       ProhibitAttributes(Attrs);
       SingleDecl = ParseExportDeclaration();
       break;
@@ -917,15 +865,6 @@ Parser::ParseExternalDeclaration(ParsedAttributes &Attrs,
       return ParseDeclaration(DeclaratorContext::File, DeclEnd, Attrs,
                               DeclSpecAttrs);
     }
-
-  case tok::kw_cbuffer:
-  case tok::kw_tbuffer:
-    if (getLangOpts().HLSL) {
-      SourceLocation DeclEnd;
-      return ParseDeclaration(DeclaratorContext::File, DeclEnd, Attrs,
-                              DeclSpecAttrs);
-    }
-    goto dont_know;
 
   case tok::kw_static:
     // Parse (then ignore) 'static' prior to a template instantiation. This is
@@ -1107,38 +1046,6 @@ Parser::DeclGroupPtrTy Parser::ParseDeclOrFunctionDefInternal(
   if (DS.hasTagDefinition())
     Actions.ActOnDefinedDeclarationSpecifier(DS.getRepAsDecl());
 
-  // ObjC2 allows prefix attributes on class interfaces and protocols.
-  // FIXME: This still needs better diagnostics. We should only accept
-  // attributes here, no types, etc.
-  if (getLangOpts().ObjC && Tok.is(tok::at)) {
-    SourceLocation AtLoc = ConsumeToken(); // the "@"
-    if (!Tok.isObjCAtKeyword(tok::objc_interface) &&
-        !Tok.isObjCAtKeyword(tok::objc_protocol) &&
-        !Tok.isObjCAtKeyword(tok::objc_implementation)) {
-      Diag(Tok, diag::err_objc_unexpected_attr);
-      SkipUntil(tok::semi);
-      return nullptr;
-    }
-
-    DS.abort();
-    DS.takeAttributesAppendingingFrom(Attrs);
-
-    const char *PrevSpec = nullptr;
-    unsigned DiagID;
-    if (DS.SetTypeSpecType(DeclSpec::TST_unspecified, AtLoc, PrevSpec, DiagID,
-                           Actions.getASTContext().getPrintingPolicy()))
-      Diag(AtLoc, DiagID) << PrevSpec;
-
-    if (Tok.isObjCAtKeyword(tok::objc_protocol))
-      return ParseObjCAtProtocolDeclaration(AtLoc, DS.getAttributes());
-
-    if (Tok.isObjCAtKeyword(tok::objc_implementation))
-      return ParseObjCAtImplementationDeclaration(AtLoc, DS.getAttributes());
-
-    return Actions.ConvertDeclToDeclGroup(
-            ParseObjCAtInterfaceDeclaration(AtLoc, DS.getAttributes()));
-  }
-
   // If the declspec consisted only of 'extern' and we have a string
   // literal following it, this must be a C++ linkage specifier like
   // 'extern "C"'.
@@ -1167,11 +1074,6 @@ Parser::DeclGroupPtrTy Parser::ParseDeclarationOrFunctionDefinition(
     return ParseDeclOrFunctionDefInternal(Attrs, DeclSpecAttrs, *DS, AS);
   } else {
     ParsingDeclSpec PDS(*this);
-    // Must temporarily exit the objective-c container scope for
-    // parsing c constructs and re-enter objc container scope
-    // afterwards.
-    ObjCDeclContextSwitch ObjCDC(*this);
-
     return ParseDeclOrFunctionDefInternal(Attrs, DeclSpecAttrs, PDS, AS);
   }
 }
@@ -1267,26 +1169,6 @@ Decl *Parser::ParseFunctionDefinition(ParsingDeclarator &D,
       Actions.MarkAsLateParsedTemplate(FnD, DP, Toks);
     }
     return DP;
-  }
-  if (CurParsedObjCImpl && !TemplateInfo.TemplateParams &&
-      (Tok.is(tok::l_brace) || Tok.is(tok::kw_try) || Tok.is(tok::colon)) &&
-      Actions.CurContext->isTranslationUnit()) {
-    ParseScope BodyScope(this, Scope::FnScope | Scope::DeclScope |
-                                   Scope::CompoundStmtScope);
-    Scope *ParentScope = getCurScope()->getParent();
-
-    D.setFunctionDefinitionKind(FunctionDefinitionKind::Definition);
-    Decl *FuncDecl = Actions.HandleDeclarator(ParentScope, D,
-                                              MultiTemplateParamsArg());
-    D.complete(FuncDecl);
-    D.getMutableDeclSpec().abort();
-    if (FuncDecl) {
-      // Consume the tokens and store them for later parsing.
-      StashAwayMethodOrFunctionBodyTokens(FuncDecl);
-      CurParsedObjCImpl->HasCFunction = true;
-      return FuncDecl;
-    }
-    // FIXME: Should we really fall through here?
   }
 
   // Enter a scope for the function body.
@@ -1740,21 +1622,6 @@ Parser::TryAnnotateName(CorrectionCandidateCallback *CCC,
     /// An Objective-C object type followed by '<' is a specialization of
     /// a parameterized class type or a protocol-qualified type.
     ParsedType Ty = Classification.getType();
-    QualType T = Actions.GetTypeFromParser(Ty);
-    if (getLangOpts().ObjC && NextToken().is(tok::less) &&
-        (T->isObjCObjectType() || T->isObjCObjectPointerType())) {
-      // Consume the name.
-      SourceLocation IdentifierLoc = ConsumeToken();
-      SourceLocation NewEndLoc;
-      TypeResult NewType
-          = parseObjCTypeArgsAndProtocolQualifiers(IdentifierLoc, Ty,
-                                                   /*consumeLastToken=*/false,
-                                                   NewEndLoc);
-      if (NewType.isUsable())
-        Ty = NewType.get();
-      else if (Tok.is(tok::eof)) // Nothing to do here, bail out...
-        return AnnotatedNameKind::Error;
-    }
 
     Tok.setKind(tok::annot_typename);
     setTypeAnnotation(Tok, Ty);
@@ -2000,24 +1867,6 @@ bool Parser::TryAnnotateTypeOrScopeTokenAfterScopeSpec(
       if (SS.isNotEmpty()) // it was a C++ qualified type name.
         BeginLoc = SS.getBeginLoc();
 
-      QualType T = Actions.GetTypeFromParser(Ty);
-
-      /// An Objective-C object type followed by '<' is a specialization of
-      /// a parameterized class type or a protocol-qualified type.
-      if (getLangOpts().ObjC && NextToken().is(tok::less) &&
-          (T->isObjCObjectType() || T->isObjCObjectPointerType())) {
-        // Consume the name.
-        SourceLocation IdentifierLoc = ConsumeToken();
-        SourceLocation NewEndLoc;
-        TypeResult NewType
-          = parseObjCTypeArgsAndProtocolQualifiers(IdentifierLoc, Ty,
-                                                   /*consumeLastToken=*/false,
-                                                   NewEndLoc);
-        if (NewType.isUsable())
-          Ty = NewType.get();
-        else if (Tok.is(tok::eof)) // Nothing to do here, bail out...
-          return false;
-      }
 
       // This is a typename. Replace the current token in-place with an
       // annotation type token.
@@ -2087,15 +1936,8 @@ bool Parser::TryAnnotateTypeOrScopeTokenAfterScopeSpec(
     }
   }
 
-  if (SS.isEmpty()) {
-    if (getLangOpts().ObjC && !getLangOpts().CPlusPlus &&
-        Tok.is(tok::coloncolon)) {
-      // ObjectiveC does not allow :: as as a scope token.
-      Diag(ConsumeToken(), diag::err_expected_type);
-      return true;
-    }
+  if (SS.isEmpty())
     return false;
-  }
 
   // A C++ scope specifier that isn't followed by a typename.
   AnnotateScopeToken(SS, IsNewScope);
@@ -2409,10 +2251,8 @@ Decl *Parser::ParseModuleImport(SourceLocation AtLoc,
   SourceLocation ExportLoc;
   TryConsumeToken(tok::kw_export, ExportLoc);
 
-  assert((AtLoc.isInvalid() ? Tok.is(tok::kw_import)
-                            : Tok.isObjCAtKeyword(tok::objc_import)) &&
+  assert(AtLoc.isInvalid() && Tok.is(tok::kw_import) &&
          "Improper start to module import");
-  bool IsObjCAtImport = Tok.isObjCAtKeyword(tok::objc_import);
   SourceLocation ImportLoc = ConsumeToken();
 
   // For C++20 modules, we can have "name" or ":Partition name" as valid input.
@@ -2523,16 +2363,6 @@ Decl *Parser::ParseModuleImport(SourceLocation AtLoc,
                                        IsPartition);
   if (Import.isInvalid())
     return nullptr;
-
-  // Using '@import' in framework headers requires modules to be enabled so that
-  // the header is parseable. Emit a warning to make the user aware.
-  if (IsObjCAtImport && AtLoc.isValid()) {
-    auto &SrcMgr = PP.getSourceManager();
-    auto FE = SrcMgr.getFileEntryRefForID(SrcMgr.getFileID(AtLoc));
-    if (FE && llvm::sys::path::parent_path(FE->getDir().getName())
-                  .ends_with(".framework"))
-      Diags.Report(AtLoc, diag::warn_atimport_in_framework_header);
-  }
 
   return Import.get();
 }
