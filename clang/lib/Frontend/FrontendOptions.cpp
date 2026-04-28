@@ -20,21 +20,18 @@ InputKind FrontendOptions::getInputKindForExtension(StringRef Extension) {
       .Cases({"S", "s"}, Language::Asm)
       .Case("i", InputKind(Language::C).getPreprocessed())
       .Case("ii", InputKind(Language::CXX).getPreprocessed())
-      .Case("cui", InputKind(Language::CUDA).getPreprocessed())
-      .Case("m", Language::ObjC)
-      .Case("mi", InputKind(Language::ObjC).getPreprocessed())
-      .Cases({"mm", "M"}, Language::ObjCXX)
-      .Case("mii", InputKind(Language::ObjCXX).getPreprocessed())
+      // Objective-C source extensions (.m, .mi, .mm, .M, .mii) are not
+      // supported. These file types will be treated as unknown inputs,
+      // resulting in an appropriate error message from the driver.
+      // CUDA source extensions (.cu, .cuh, .cui) are not supported.
+      // OpenCL source extensions (.cl, .clcpp) are not supported.
+      // HIP source extensions (.hip) are not supported.
+      // HLSL source extensions (.hlsl) are not supported.
       .Cases({"C", "cc", "cp"}, Language::CXX)
       .Cases({"cpp", "CPP", "c++", "cxx", "hpp", "hxx"}, Language::CXX)
       .Case("cppm", Language::CXX)
       .Cases({"iim", "iih"}, InputKind(Language::CXX).getPreprocessed())
-      .Case("cl", Language::OpenCL)
-      .Case("clcpp", Language::OpenCLCXX)
-      .Cases({"cu", "cuh"}, Language::CUDA)
-      .Case("hip", Language::HIP)
       .Cases({"ll", "bc"}, Language::LLVM_IR)
-      .Case("hlsl", Language::HLSL)
       .Case("cir", Language::CIR)
       .Default(Language::Unknown);
 }

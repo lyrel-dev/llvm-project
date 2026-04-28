@@ -191,78 +191,9 @@ LANGSTANDARD(gnucxx26, "gnu++2c",
              CPlusPlus20 | CPlusPlus23 | CPlusPlus26 | Digraphs | HexFloat | GNUMode, 202400)
 LANGSTANDARD_ALIAS(gnucxx26, "gnu++26")
 
-// OpenCL
-LANGSTANDARD(opencl10, "cl1.0",
-             OpenCL, "OpenCL 1.0",
-             LineComment | C99 | Digraphs | HexFloat | OpenCL, std::nullopt)
-LANGSTANDARD_ALIAS_DEPR(opencl10, "cl")
-
-LANGSTANDARD(opencl11, "cl1.1",
-             OpenCL, "OpenCL 1.1",
-             LineComment | C99 | Digraphs | HexFloat | OpenCL, std::nullopt)
-LANGSTANDARD(opencl12, "cl1.2",
-             OpenCL, "OpenCL 1.2",
-             LineComment | C99 | Digraphs | HexFloat | OpenCL, std::nullopt)
-LANGSTANDARD(opencl20, "cl2.0",
-             OpenCL, "OpenCL 2.0",
-             LineComment | C99 | Digraphs | HexFloat | OpenCL, std::nullopt)
-LANGSTANDARD(opencl30, "cl3.0",
-             OpenCL, "OpenCL 3.0",
-             LineComment | C99 | Digraphs | HexFloat | OpenCL, std::nullopt)
-
-LANGSTANDARD(openclcpp10, "clc++1.0",
-             OpenCL, "C++ for OpenCL 1.0",
-             LineComment | CPlusPlus | CPlusPlus11 | CPlusPlus14 | CPlusPlus17 |
-             Digraphs | HexFloat | OpenCL, std::nullopt)
-LANGSTANDARD_ALIAS(openclcpp10, "clc++")
-
-LANGSTANDARD(openclcpp2021, "clc++2021",
-             OpenCL, "C++ for OpenCL 2021",
-             LineComment | CPlusPlus | CPlusPlus11 | CPlusPlus14 | CPlusPlus17 |
-             Digraphs | HexFloat | OpenCL, std::nullopt)
-
-LANGSTANDARD_ALIAS_DEPR(opencl10, "CL")
-LANGSTANDARD_ALIAS_DEPR(opencl11, "CL1.1")
-LANGSTANDARD_ALIAS_DEPR(opencl12, "CL1.2")
-LANGSTANDARD_ALIAS_DEPR(opencl20, "CL2.0")
-LANGSTANDARD_ALIAS_DEPR(opencl30, "CL3.0")
-LANGSTANDARD_ALIAS_DEPR(openclcpp10, "CLC++")
-LANGSTANDARD_ALIAS_DEPR(openclcpp10, "CLC++1.0")
-LANGSTANDARD_ALIAS_DEPR(openclcpp2021, "CLC++2021")
-
-// HLSL
-LANGSTANDARD(hlsl, "hlsl",
-             HLSL, "High Level Shader Language",
-             LineComment | HLSL | CPlusPlus | CPlusPlus11, std::nullopt)
-
-LANGSTANDARD(hlsl2015, "hlsl2015",
-             HLSL, "High Level Shader Language 2015",
-             LineComment | HLSL | CPlusPlus | CPlusPlus11, std::nullopt)
-
-LANGSTANDARD(hlsl2016, "hlsl2016",
-             HLSL, "High Level Shader Language 2016",
-             LineComment | HLSL | CPlusPlus | CPlusPlus11, std::nullopt)
-
-LANGSTANDARD(hlsl2017, "hlsl2017",
-             HLSL, "High Level Shader Language 2017",
-             LineComment | HLSL | CPlusPlus | CPlusPlus11, std::nullopt)
-
-LANGSTANDARD(hlsl2018, "hlsl2018",
-             HLSL, "High Level Shader Language 2018",
-             LineComment | HLSL | CPlusPlus | CPlusPlus11, std::nullopt)
-
-LANGSTANDARD(hlsl2021, "hlsl2021",
-             HLSL, "High Level Shader Language 2021",
-             LineComment | HLSL | CPlusPlus | CPlusPlus11, std::nullopt)
-
-LANGSTANDARD(hlsl202x, "hlsl202x",
-             HLSL, "High Level Shader Language 202x",
-             LineComment | HLSL | CPlusPlus | CPlusPlus11, std::nullopt)
-
-LANGSTANDARD(hlsl202y, "hlsl202y",
-             HLSL, "High Level Shader Language 202y",
-             LineComment | HLSL | CPlusPlus | CPlusPlus11, std::nullopt)
-
+// Note: OpenCL and HLSL language standards have been removed. This build
+// supports only standard C and C++ inputs. Attempting to use OpenCL or HLSL
+// language standards will result in a compile-time error.
 
 #undef LANGSTANDARD
 #undef LANGSTANDARD_ALIAS

@@ -8,6 +8,12 @@
 //
 //  This file implements the Objective-C portions of the Parser interface.
 //
+//  NOTE: Objective-C is no longer a supported language in this build. All code
+//  in this file is dead (unreachable) because the frontend rejects ObjC inputs
+//  in CompilerInvocation::ParseLangArgs(). This file is retained only to
+//  satisfy the linker (method declarations in Parser.h must be defined).
+//  See clang/docs/ReducedParser.md for the full cleanup roadmap.
+//
 //===----------------------------------------------------------------------===//
 
 #include "clang/AST/ASTContext.h"

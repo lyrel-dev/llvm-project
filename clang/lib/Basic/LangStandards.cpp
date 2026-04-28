@@ -73,14 +73,9 @@ LangStandard::Kind LangStandard::getLangKind(StringRef Name) {
 }
 
 LangStandard::Kind LangStandard::getHLSLLangKind(StringRef Name) {
-  return llvm::StringSwitch<LangStandard::Kind>(Name)
-      .Case("2016", LangStandard::lang_hlsl2016)
-      .Case("2017", LangStandard::lang_hlsl2017)
-      .Case("2018", LangStandard::lang_hlsl2018)
-      .Case("2021", LangStandard::lang_hlsl2021)
-      .Case("202x", LangStandard::lang_hlsl202x)
-      .Case("202y", LangStandard::lang_hlsl202y)
-      .Default(LangStandard::lang_unspecified);
+  // HLSL is no longer supported. This function is retained for ABI compatibility
+  // but always returns lang_unspecified.
+  return LangStandard::lang_unspecified;
 }
 
 const LangStandard *LangStandard::getLangStandardForName(StringRef Name) {
@@ -99,9 +94,10 @@ LangStandard::Kind clang::getDefaultLanguageStandard(clang::Language Lang,
   case Language::CIR:
     llvm_unreachable("Invalid input kind!");
   case Language::OpenCL:
-    return LangStandard::lang_opencl12;
   case Language::OpenCLCXX:
-    return LangStandard::lang_openclcpp10;
+    // OpenCL is not supported; this code path is unreachable since
+    // the frontend rejects OpenCL inputs before reaching here.
+    llvm_unreachable("OpenCL is not supported");
   case Language::Asm:
   case Language::C:
     // The PS4 uses C99 as the default C standard.
@@ -109,14 +105,18 @@ LangStandard::Kind clang::getDefaultLanguageStandard(clang::Language Lang,
       return LangStandard::lang_gnu99;
     return LangStandard::lang_gnu17;
   case Language::ObjC:
-    return LangStandard::lang_gnu11;
+    // Objective-C is not supported; this code path is unreachable since
+    // the frontend rejects ObjC inputs before reaching here.
+    llvm_unreachable("Objective-C is not supported");
   case Language::CXX:
   case Language::ObjCXX:
   case Language::CUDA:
   case Language::HIP:
     return LangStandard::lang_gnucxx17;
   case Language::HLSL:
-    return LangStandard::lang_hlsl202x;
+    // HLSL is not supported; this code path is unreachable since
+    // the frontend rejects HLSL inputs before reaching here.
+    llvm_unreachable("HLSL is not supported");
   }
   llvm_unreachable("unhandled Language kind!");
 }

@@ -8,6 +8,10 @@
 //
 // This file implements the parsing logic for OpenACC language features.
 //
+// NOTE: OpenACC is no longer a supported input mode in this build. All code in
+// this file is dead (unreachable). This file is retained only to satisfy the
+// linker. See clang/docs/ReducedParser.md for the full cleanup roadmap.
+//
 //===----------------------------------------------------------------------===//
 
 #include "clang/AST/OpenACCClause.h"

@@ -2694,10 +2694,6 @@ bool clang::ParseDiagnosticArgs(DiagnosticOptions &Opts, ArgList &Args,
 unsigned clang::getOptimizationLevel(const ArgList &Args, InputKind IK,
                                      DiagnosticsEngine &Diags) {
   unsigned DefaultOpt = 0;
-  if ((IK.getLanguage() == Language::OpenCL ||
-       IK.getLanguage() == Language::OpenCLCXX) &&
-      !Args.hasArg(OPT_cl_opt_disable))
-    DefaultOpt = 2;
 
   if (Arg *A = Args.getLastArg(options::OPT_O_Group)) {
     if (A->getOption().matches(options::OPT_O0))
@@ -3729,21 +3725,7 @@ void CompilerInvocationBase::GenerateLangArgs(const LangOptions &Opts,
     return;
   }
 
-  OptSpecifier StdOpt;
-  switch (Opts.LangStd) {
-  case LangStandard::lang_opencl10:
-  case LangStandard::lang_opencl11:
-  case LangStandard::lang_opencl12:
-  case LangStandard::lang_opencl20:
-  case LangStandard::lang_opencl30:
-  case LangStandard::lang_openclcpp10:
-  case LangStandard::lang_openclcpp2021:
-    StdOpt = OPT_cl_std_EQ;
-    break;
-  default:
-    StdOpt = OPT_std_EQ;
-    break;
-  }
+  OptSpecifier StdOpt = OPT_std_EQ;
 
   auto LangStandard = LangStandard::getLangStandardForKind(Opts.LangStd);
   GenerateArg(Consumer, StdOpt, LangStandard.getName());
@@ -4025,6 +4007,22 @@ bool CompilerInvocation::ParseLangArgs(LangOptions &Opts, ArgList &Args,
     return Diags.getNumErrors() == NumErrorsBefore;
   }
 
+  // Reject unsupported input language kinds. Only C and C++ are supported.
+  switch (IK.getLanguage()) {
+  case Language::ObjC:
+  case Language::ObjCXX:
+  case Language::OpenCL:
+  case Language::OpenCLCXX:
+  case Language::CUDA:
+  case Language::HIP:
+  case Language::HLSL:
+    Diags.Report(diag::err_fe_unsupported_input_language)
+        << GetInputKindName(IK);
+    return false;
+  default:
+    break;
+  }
+
   // Other LangOpts are only initialized when the input is not AST or LLVM IR.
   // FIXME: Should we really be parsing this for an Language::Asm input?
 
@@ -4069,33 +4067,11 @@ bool CompilerInvocation::ParseLangArgs(LangOptions &Opts, ArgList &Args,
     }
   }
 
-  // -cl-std only applies for OpenCL language standards.
-  // Override the -std option in this case.
-  if (const Arg *A = Args.getLastArg(OPT_cl_std_EQ)) {
-    LangStandard::Kind OpenCLLangStd =
-        llvm::StringSwitch<LangStandard::Kind>(A->getValue())
-            .Cases({"cl", "CL"}, LangStandard::lang_opencl10)
-            .Cases({"cl1.0", "CL1.0"}, LangStandard::lang_opencl10)
-            .Cases({"cl1.1", "CL1.1"}, LangStandard::lang_opencl11)
-            .Cases({"cl1.2", "CL1.2"}, LangStandard::lang_opencl12)
-            .Cases({"cl2.0", "CL2.0"}, LangStandard::lang_opencl20)
-            .Cases({"cl3.0", "CL3.0"}, LangStandard::lang_opencl30)
-            .Cases({"clc++", "CLC++"}, LangStandard::lang_openclcpp10)
-            .Cases({"clc++1.0", "CLC++1.0"}, LangStandard::lang_openclcpp10)
-            .Cases({"clc++2021", "CLC++2021"}, LangStandard::lang_openclcpp2021)
-            .Default(LangStandard::lang_unspecified);
-
-    if (OpenCLLangStd == LangStandard::lang_unspecified) {
-      Diags.Report(diag::err_drv_invalid_value)
-        << A->getAsString(Args) << A->getValue();
-    }
-    else
-      LangStd = OpenCLLangStd;
+  // Note: -cl-std is no longer supported as OpenCL is not a supported language.
+  if (Args.hasArg(OPT_cl_std_EQ)) {
+    Diags.Report(diag::err_fe_unsupported_input_language) << "OpenCL";
+    return false;
   }
-
-  // These need to be parsed now. They are used to set OpenCL defaults.
-  Opts.IncludeDefaultHeader = Args.hasArg(OPT_finclude_default_header);
-  Opts.DeclareOpenCLBuiltins = Args.hasArg(OPT_fdeclare_opencl_builtins);
 
   LangOptions::setLangDefaults(Opts, IK.getLanguage(), T, Includes, LangStd);
 

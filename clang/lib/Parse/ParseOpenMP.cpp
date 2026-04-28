@@ -8,6 +8,13 @@
 /// \file
 /// This file implements parsing of all OpenMP directives and clauses.
 ///
+/// NOTE: OpenMP is no longer a supported input mode in this build. All code in
+/// this file is dead (unreachable) because OpenMP is rejected at the pragma
+/// handling layer when the language is not explicitly set to an OpenMP mode,
+/// and non-C/C++ inputs are rejected in CompilerInvocation::ParseLangArgs().
+/// This file is retained only to satisfy the linker.
+/// See clang/docs/ReducedParser.md for the full cleanup roadmap.
+///
 //===----------------------------------------------------------------------===//
 
 #include "clang/AST/ASTContext.h"
