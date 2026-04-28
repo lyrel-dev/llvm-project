@@ -13,17 +13,13 @@
 #ifndef LLVM_CLANG_PARSE_PARSER_H
 #define LLVM_CLANG_PARSE_PARSER_H
 
-#include "clang/Basic/OpenACCKinds.h"
 #include "clang/Basic/OperatorPrecedence.h"
 #include "clang/Lex/CodeCompletionHandler.h"
 #include "clang/Lex/Preprocessor.h"
 #include "clang/Sema/Sema.h"
 #include "clang/Sema/SemaCodeCompletion.h"
-#include "clang/Sema/SemaObjC.h"
-#include "clang/Sema/SemaOpenMP.h"
 #include "llvm/ADT/STLForwardCompat.h"
 #include "llvm/ADT/SmallVector.h"
-#include "llvm/Frontend/OpenMP/OMPContext.h"
 #include "llvm/Support/SaveAndRestore.h"
 #include <optional>
 #include <stack>
@@ -42,15 +38,7 @@ class ParsingDeclSpec;
 class ParsingDeclarator;
 class ParsingFieldDeclarator;
 class ColonProtectionRAIIObject;
-class InMessageExpressionRAIIObject;
 class PoisonSEHIdentifiersRAIIObject;
-class OMPClause;
-class OpenACCClause;
-class ObjCTypeParamList;
-struct OMPTraitProperty;
-struct OMPTraitSelector;
-struct OMPTraitSet;
-class OMPTraitInfo;
 
 enum class AnnotatedNameKind {
   /// Annotation has failed and emitted an error.
@@ -86,20 +74,6 @@ enum class ParsedTemplateKind {
 };
 
 enum class CachedInitKind { DefaultArgument, DefaultInitializer };
-
-// Definitions for Objective-c context sensitive keywords recognition.
-enum class ObjCTypeQual {
-  in = 0,
-  out,
-  inout,
-  oneway,
-  bycopy,
-  byref,
-  nonnull,
-  nullable,
-  null_unspecified,
-  NumQuals
-};
 
 /// If a typo should be encountered, should typo correction suggest type names,
 /// non type names, or both?
@@ -220,11 +194,7 @@ class Parser : public CodeCompletionHandler {
   // 4. C++ Declarations (ParseDeclCXX.cpp)
   // 5. Expressions (ParseExpr.cpp)
   // 6. C++ Expressions (ParseExprCXX.cpp)
-  // 7. HLSL Constructs (ParseHLSL.cpp)
   // 8. Initializers (ParseInit.cpp)
-  // 9. Objective-C Constructs (ParseObjc.cpp)
-  // 10. OpenACC Constructs (ParseOpenACC.cpp)
-  // 11. OpenMP Constructs (ParseOpenMP.cpp)
   // 12. Pragmas (ParsePragma.cpp)
   // 13. Statements (ParseStmt.cpp)
   // 14. `inline asm` Statement (ParseStmtAsm.cpp)
@@ -1542,8 +1512,6 @@ private:
     DSC_template_param,     // template parameter context
     DSC_template_arg,       // template argument context
     DSC_template_type_arg,  // template type argument context
-    DSC_objc_method_result, // ObjC method result context, enables
-                            // 'instancetype'
     DSC_condition,          // condition declaration context
     DSC_association, // A _Generic selection expression's type association
     DSC_new,         // C++ new expression
@@ -1558,7 +1526,6 @@ private:
     case DeclSpecContext::DSC_template_arg:
     case DeclSpecContext::DSC_class:
     case DeclSpecContext::DSC_top_level:
-    case DeclSpecContext::DSC_objc_method_result:
     case DeclSpecContext::DSC_condition:
       return false;
 
@@ -1599,7 +1566,6 @@ private:
     case DeclSpecContext::DSC_class:
     case DeclSpecContext::DSC_top_level:
     case DeclSpecContext::DSC_alias_declaration:
-    case DeclSpecContext::DSC_objc_method_result:
       return AllowDefiningTypeSpec::Yes;
 
     case DeclSpecContext::DSC_condition:
@@ -1632,7 +1598,6 @@ private:
       return true;
 
     case DeclSpecContext::DSC_alias_declaration:
-    case DeclSpecContext::DSC_objc_method_result:
     case DeclSpecContext::DSC_condition:
     case DeclSpecContext::DSC_template_param:
     case DeclSpecContext::DSC_template_type_arg:
@@ -1664,7 +1629,6 @@ private:
     case DeclSpecContext::DSC_new:
       return true;
 
-    case DeclSpecContext::DSC_objc_method_result:
     case DeclSpecContext::DSC_template_type_arg:
     case DeclSpecContext::DSC_trailing:
     case DeclSpecContext::DSC_alias_declaration:
@@ -1688,7 +1652,6 @@ private:
       return ImplicitTypenameContext::Yes;
 
     case DeclSpecContext::DSC_normal:
-    case DeclSpecContext::DSC_objc_method_result:
     case DeclSpecContext::DSC_condition:
     case DeclSpecContext::DSC_template_arg:
     case DeclSpecContext::DSC_conv_operator:
@@ -2290,7 +2253,7 @@ private:
 
   bool MaybeParseMicrosoftAttributes(ParsedAttributes &Attrs) {
     bool AttrsParsed = false;
-    if ((getLangOpts().MicrosoftExt || getLangOpts().HLSL) &&
+    if (getLangOpts().MicrosoftExt &&
         Tok.is(tok::l_square)) {
       ParsedAttributes AttrsWithRange(AttrFactory);
       ParseMicrosoftAttributes(AttrsWithRange);
@@ -2328,9 +2291,6 @@ private:
   void ParseOpenCLKernelAttributes(ParsedAttributes &attrs);
   void ParseOpenCLQualifiers(ParsedAttributes &Attrs);
   void ParseNullabilityTypeSpecifiers(ParsedAttributes &attrs);
-  void ParseCUDAFunctionAttributes(ParsedAttributes &attrs);
-  bool isHLSLQualifier(const Token &Tok) const;
-  void ParseHLSLQualifiers(ParsedAttributes &Attrs);
 
   /// Parse a version number.
   ///
@@ -2403,26 +2363,6 @@ private:
                                           SourceLocation ScopeLoc,
                                           ParsedAttr::Form Form);
 
-  /// Parse the contents of the "objc_bridge_related" attribute.
-  /// \verbatim
-  /// objc_bridge_related '(' related_class ',' opt-class_method ',' opt-instance_method ')'
-  /// related_class:
-  ///     Identifier
-  ///
-  /// opt-class_method:
-  ///     Identifier: | <empty>
-  ///
-  /// opt-instance_method:
-  ///     Identifier | <empty>
-  /// \endverbatim
-  ///
-  void ParseObjCBridgeRelatedAttribute(IdentifierInfo &ObjCBridgeRelated,
-                                       SourceLocation ObjCBridgeRelatedLoc,
-                                       ParsedAttributes &Attrs,
-                                       SourceLocation *EndLoc,
-                                       IdentifierInfo *ScopeName,
-                                       SourceLocation ScopeLoc,
-                                       ParsedAttr::Form Form);
 
   void ParseSwiftNewTypeAttribute(IdentifierInfo &AttrName,
                                   SourceLocation AttrNameLoc,
@@ -2975,9 +2915,6 @@ private:
   /// locations where attributes are not allowed.
   void DiagnoseAndSkipCXX11Attributes();
 
-  void ParseOpenMPAttributeArgs(const IdentifierInfo *AttrName,
-                                CachedTokens &OpenMPTokens);
-
   /// Parse a C++11 or C23 attribute-specifier.
   ///
   /// \verbatim
@@ -3005,13 +2942,10 @@ private:
   ///         identifier
   /// \endverbatim
   void ParseCXX11AttributeSpecifierInternal(ParsedAttributes &Attrs,
-                                            CachedTokens &OpenMPTokens,
                                             SourceLocation *EndLoc = nullptr);
   void ParseCXX11AttributeSpecifier(ParsedAttributes &Attrs,
                                     SourceLocation *EndLoc = nullptr) {
-    CachedTokens OpenMPTokens;
-    ParseCXX11AttributeSpecifierInternal(Attrs, OpenMPTokens, EndLoc);
-    ReplayOpenMPAttributeTokens(OpenMPTokens);
+    ParseCXX11AttributeSpecifierInternal(Attrs, EndLoc);
   }
 
   /// ParseCXX11Attributes - Parse a C++11 or C23 attribute-specifier-seq.
@@ -3044,8 +2978,7 @@ private:
                                SourceLocation AttrNameLoc,
                                ParsedAttributes &Attrs, SourceLocation *EndLoc,
                                IdentifierInfo *ScopeName,
-                               SourceLocation ScopeLoc,
-                               CachedTokens &OpenMPTokens);
+                               SourceLocation ScopeLoc);
 
   /// Parse the argument to C++23's [[assume()]] attribute. Returns true on
   /// error.
@@ -3203,16 +3136,6 @@ private:
   ///       export-declaration:
   ///         'export' declaration
   ///         'export' '{' declaration-seq[opt] '}'
-  /// \endverbatim
-  ///
-  /// HLSL: Parse export function declaration.
-  ///
-  /// \verbatim
-  ///      export-function-declaration:
-  ///         'export' function-declaration
-  ///
-  ///      export-declaration-group:
-  ///         'export' '{' function-declaration-seq[opt] '}'
   /// \endverbatim
   ///
   Decl *ParseExportDeclaration();
@@ -3604,8 +3527,6 @@ private:
   /// or Microsoft 'sealed' or 'abstract' contextual
   /// keyword.
   bool isClassCompatibleKeyword(Token Tok) const;
-
-  void ParseHLSLRootSignatureAttributeArgs(ParsedAttributes &Attrs);
 
   ///@}
 
@@ -4266,12 +4187,6 @@ private:
   /// \endverbatim
   ExprResult ParseGenericSelectionExpression();
 
-  /// ParseObjCBoolLiteral - This handles the objective-c Boolean literals.
-  ///
-  ///         '__objc_yes'
-  ///         '__objc_no'
-  ExprResult ParseObjCBoolLiteral();
-
   /// Parse A C++1z fold-expression after the opening paren and optional
   /// left-hand-side expression.
   ///
@@ -4299,19 +4214,6 @@ private:
   /// [clang]   '(' parameter-list ')'
   /// \endverbatim
   ExprResult ParseBlockLiteralExpression(); // ^{...}
-
-  /// Parse an assignment expression where part of an Objective-C message
-  /// send has already been parsed.
-  ///
-  /// In this case \p LBracLoc indicates the location of the '[' of the message
-  /// send, and either \p ReceiverName or \p ReceiverExpr is non-null indicating
-  /// the receiver of the message.
-  ///
-  /// Since this handles full assignment-expression's, it handles postfix
-  /// expressions and other binary operators for these expressions as well.
-  ExprResult ParseAssignmentExprWithObjCMessageExprStart(
-      SourceLocation LBracloc, SourceLocation SuperLoc, ParsedType ReceiverType,
-      Expr *ReceiverExpr);
 
   /// Return true if we know that we are definitely looking at a
   /// decl-specifier, and isn't part of an expression such as a function-style
@@ -4367,12 +4269,6 @@ private:
   /// \endverbatim
   std::optional<AvailabilitySpec> ParseAvailabilitySpec();
   ExprResult ParseAvailabilityCheckExpr(SourceLocation StartLoc);
-
-  /// Tries to parse cast part of OpenMP array shaping operation:
-  /// \verbatim
-  /// '[' expression ']' { '[' expression ']' } ')'
-  /// \endverbatim
-  bool tryParseOpenMPArrayShapingCastPart();
 
   ExprResult ParseBuiltinPtrauthTypeDiscriminator();
 
@@ -5191,52 +5087,6 @@ private:
   //
   //
 
-  /// \name HLSL Constructs
-  /// Implementations are in ParseHLSL.cpp
-  ///@{
-
-private:
-  bool MaybeParseHLSLAnnotations(Declarator &D,
-                                 SourceLocation *EndLoc = nullptr,
-                                 bool CouldBeBitField = false) {
-    assert(getLangOpts().HLSL && "MaybeParseHLSLAnnotations is for HLSL only");
-    if (Tok.is(tok::colon)) {
-      ParsedAttributes Attrs(AttrFactory);
-      ParseHLSLAnnotations(Attrs, EndLoc, CouldBeBitField);
-      D.takeAttributesAppending(Attrs);
-      return true;
-    }
-    return false;
-  }
-
-  void MaybeParseHLSLAnnotations(ParsedAttributes &Attrs,
-                                 SourceLocation *EndLoc = nullptr) {
-    assert(getLangOpts().HLSL && "MaybeParseHLSLAnnotations is for HLSL only");
-    if (Tok.is(tok::colon))
-      ParseHLSLAnnotations(Attrs, EndLoc);
-  }
-
-  struct ParsedSemantic {
-    StringRef Name = "";
-    unsigned Index = 0;
-    bool Explicit = false;
-  };
-
-  ParsedSemantic ParseHLSLSemantic();
-
-  void ParseHLSLAnnotations(ParsedAttributes &Attrs,
-                            SourceLocation *EndLoc = nullptr,
-                            bool CouldBeBitField = false);
-  Decl *ParseHLSLBuffer(SourceLocation &DeclEnd, ParsedAttributes &Attrs);
-
-  ///@}
-
-  //
-  //
-  // -------------------------------------------------------------------------
-  //
-  //
-
   /// \name Initializers
   /// Implementations are in ParseInit.cpp
   ///@{
@@ -5345,1686 +5195,6 @@ private:
   //
   //
 
-  /// \name Objective-C Constructs
-  /// Implementations are in ParseObjc.cpp
-  ///@{
-
-public:
-  friend class InMessageExpressionRAIIObject;
-  friend class ObjCDeclContextSwitch;
-
-  ObjCContainerDecl *getObjCDeclContext() const {
-    return Actions.ObjC().getObjCDeclContext();
-  }
-
-  /// Retrieve the underscored keyword (_Nonnull, _Nullable) that corresponds
-  /// to the given nullability kind.
-  IdentifierInfo *getNullabilityKeyword(NullabilityKind nullability) {
-    return Actions.getNullabilityKeyword(nullability);
-  }
-
-private:
-  /// Objective-C contextual keywords.
-  IdentifierInfo *Ident_instancetype;
-
-  /// Ident_super - IdentifierInfo for "super", to support fast
-  /// comparison.
-  IdentifierInfo *Ident_super;
-
-  /// When true, we are directly inside an Objective-C message
-  /// send expression.
-  ///
-  /// This is managed by the \c InMessageExpressionRAIIObject class, and
-  /// should not be set directly.
-  bool InMessageExpression;
-
-  /// True if we are within an Objective-C container while parsing C-like decls.
-  ///
-  /// This is necessary because Sema thinks we have left the container
-  /// to parse the C-like decls, meaning Actions.ObjC().getObjCDeclContext()
-  /// will be NULL.
-  bool ParsingInObjCContainer;
-
-  /// Returns true if the current token is the identifier 'instancetype'.
-  ///
-  /// Should only be used in Objective-C language modes.
-  bool isObjCInstancetype() {
-    assert(getLangOpts().ObjC);
-    if (Tok.isAnnotation())
-      return false;
-    if (!Ident_instancetype)
-      Ident_instancetype = PP.getIdentifierInfo("instancetype");
-    return Tok.getIdentifierInfo() == Ident_instancetype;
-  }
-
-  /// ObjCDeclContextSwitch - An object used to switch context from
-  /// an objective-c decl context to its enclosing decl context and
-  /// back.
-  class ObjCDeclContextSwitch {
-    Parser &P;
-    ObjCContainerDecl *DC;
-    SaveAndRestore<bool> WithinObjCContainer;
-
-  public:
-    explicit ObjCDeclContextSwitch(Parser &p)
-        : P(p), DC(p.getObjCDeclContext()),
-          WithinObjCContainer(P.ParsingInObjCContainer, DC != nullptr) {
-      if (DC)
-        P.Actions.ObjC().ActOnObjCTemporaryExitContainerContext(DC);
-    }
-    ~ObjCDeclContextSwitch() {
-      if (DC)
-        P.Actions.ObjC().ActOnObjCReenterContainerContext(DC);
-    }
-  };
-
-  void CheckNestedObjCContexts(SourceLocation AtLoc);
-
-  void ParseLexedObjCMethodDefs(LexedMethod &LM, bool parseMethod);
-
-  // Objective-C External Declarations
-
-  /// Skips attributes after an Objective-C @ directive. Emits a diagnostic.
-  void MaybeSkipAttributes(tok::ObjCKeywordKind Kind);
-
-  /// ParseObjCAtDirectives - Handle parts of the external-declaration
-  /// production:
-  /// \verbatim
-  ///       external-declaration: [C99 6.9]
-  /// [OBJC]  objc-class-definition
-  /// [OBJC]  objc-class-declaration
-  /// [OBJC]  objc-alias-declaration
-  /// [OBJC]  objc-protocol-definition
-  /// [OBJC]  objc-method-definition
-  /// [OBJC]  '@' 'end'
-  /// \endverbatim
-  DeclGroupPtrTy ParseObjCAtDirectives(ParsedAttributes &DeclAttrs,
-                                       ParsedAttributes &DeclSpecAttrs);
-
-  ///
-  /// \verbatim
-  /// objc-class-declaration:
-  ///    '@' 'class' objc-class-forward-decl (',' objc-class-forward-decl)* ';'
-  ///
-  /// objc-class-forward-decl:
-  ///   identifier objc-type-parameter-list[opt]
-  /// \endverbatim
-  ///
-  DeclGroupPtrTy ParseObjCAtClassDeclaration(SourceLocation atLoc);
-
-  ///
-  /// \verbatim
-  ///   objc-interface:
-  ///     objc-class-interface-attributes[opt] objc-class-interface
-  ///     objc-category-interface
-  ///
-  ///   objc-class-interface:
-  ///     '@' 'interface' identifier objc-type-parameter-list[opt]
-  ///       objc-superclass[opt] objc-protocol-refs[opt]
-  ///       objc-class-instance-variables[opt]
-  ///       objc-interface-decl-list
-  ///     @end
-  ///
-  ///   objc-category-interface:
-  ///     '@' 'interface' identifier objc-type-parameter-list[opt]
-  ///       '(' identifier[opt] ')' objc-protocol-refs[opt]
-  ///       objc-interface-decl-list
-  ///     @end
-  ///
-  ///   objc-superclass:
-  ///     ':' identifier objc-type-arguments[opt]
-  ///
-  ///   objc-class-interface-attributes:
-  ///     __attribute__((visibility("default")))
-  ///     __attribute__((visibility("hidden")))
-  ///     __attribute__((deprecated))
-  ///     __attribute__((unavailable))
-  ///     __attribute__((objc_exception)) - used by NSException on 64-bit
-  ///     __attribute__((objc_root_class))
-  /// \endverbatim
-  ///
-  Decl *ParseObjCAtInterfaceDeclaration(SourceLocation AtLoc,
-                                        ParsedAttributes &prefixAttrs);
-
-  /// Class to handle popping type parameters when leaving the scope.
-  class ObjCTypeParamListScope;
-
-  /// Parse an objc-type-parameter-list.
-  ObjCTypeParamList *parseObjCTypeParamList();
-
-  /// Parse an Objective-C type parameter list, if present, or capture
-  /// the locations of the protocol identifiers for a list of protocol
-  /// references.
-  ///
-  /// \verbatim
-  ///   objc-type-parameter-list:
-  ///     '<' objc-type-parameter (',' objc-type-parameter)* '>'
-  ///
-  ///   objc-type-parameter:
-  ///     objc-type-parameter-variance? identifier objc-type-parameter-bound[opt]
-  ///
-  ///   objc-type-parameter-bound:
-  ///     ':' type-name
-  ///
-  ///   objc-type-parameter-variance:
-  ///     '__covariant'
-  ///     '__contravariant'
-  /// \endverbatim
-  ///
-  /// \param lAngleLoc The location of the starting '<'.
-  ///
-  /// \param protocolIdents Will capture the list of identifiers, if the
-  /// angle brackets contain a list of protocol references rather than a
-  /// type parameter list.
-  ///
-  /// \param rAngleLoc The location of the ending '>'.
-  ObjCTypeParamList *parseObjCTypeParamListOrProtocolRefs(
-      ObjCTypeParamListScope &Scope, SourceLocation &lAngleLoc,
-      SmallVectorImpl<IdentifierLoc> &protocolIdents, SourceLocation &rAngleLoc,
-      bool mayBeProtocolList = true);
-
-  void HelperActionsForIvarDeclarations(ObjCContainerDecl *interfaceDecl,
-                                        SourceLocation atLoc,
-                                        BalancedDelimiterTracker &T,
-                                        SmallVectorImpl<Decl *> &AllIvarDecls,
-                                        bool RBraceMissing);
-
-  /// \verbatim
-  ///   objc-class-instance-variables:
-  ///     '{' objc-instance-variable-decl-list[opt] '}'
-  ///
-  ///   objc-instance-variable-decl-list:
-  ///     objc-visibility-spec
-  ///     objc-instance-variable-decl ';'
-  ///     ';'
-  ///     objc-instance-variable-decl-list objc-visibility-spec
-  ///     objc-instance-variable-decl-list objc-instance-variable-decl ';'
-  ///     objc-instance-variable-decl-list static_assert-declaration
-  ///     objc-instance-variable-decl-list ';'
-  ///
-  ///   objc-visibility-spec:
-  ///     @private
-  ///     @protected
-  ///     @public
-  ///     @package [OBJC2]
-  ///
-  ///   objc-instance-variable-decl:
-  ///     struct-declaration
-  /// \endverbatim
-  ///
-  void ParseObjCClassInstanceVariables(ObjCContainerDecl *interfaceDecl,
-                                       tok::ObjCKeywordKind visibility,
-                                       SourceLocation atLoc);
-
-  /// \verbatim
-  ///   objc-protocol-refs:
-  ///     '<' identifier-list '>'
-  /// \endverbatim
-  ///
-  bool ParseObjCProtocolReferences(
-      SmallVectorImpl<Decl *> &P, SmallVectorImpl<SourceLocation> &PLocs,
-      bool WarnOnDeclarations, bool ForObjCContainer, SourceLocation &LAngleLoc,
-      SourceLocation &EndProtoLoc, bool consumeLastToken);
-
-  /// Parse the first angle-bracket-delimited clause for an
-  /// Objective-C object or object pointer type, which may be either
-  /// type arguments or protocol qualifiers.
-  ///
-  /// \verbatim
-  ///   objc-type-arguments:
-  ///     '<' type-name '...'[opt] (',' type-name '...'[opt])* '>'
-  /// \endverbatim
-  ///
-  void parseObjCTypeArgsOrProtocolQualifiers(
-      ParsedType baseType, SourceLocation &typeArgsLAngleLoc,
-      SmallVectorImpl<ParsedType> &typeArgs, SourceLocation &typeArgsRAngleLoc,
-      SourceLocation &protocolLAngleLoc, SmallVectorImpl<Decl *> &protocols,
-      SmallVectorImpl<SourceLocation> &protocolLocs,
-      SourceLocation &protocolRAngleLoc, bool consumeLastToken,
-      bool warnOnIncompleteProtocols);
-
-  /// Parse either Objective-C type arguments or protocol qualifiers; if the
-  /// former, also parse protocol qualifiers afterward.
-  void parseObjCTypeArgsAndProtocolQualifiers(
-      ParsedType baseType, SourceLocation &typeArgsLAngleLoc,
-      SmallVectorImpl<ParsedType> &typeArgs, SourceLocation &typeArgsRAngleLoc,
-      SourceLocation &protocolLAngleLoc, SmallVectorImpl<Decl *> &protocols,
-      SmallVectorImpl<SourceLocation> &protocolLocs,
-      SourceLocation &protocolRAngleLoc, bool consumeLastToken);
-
-  /// Parse a protocol qualifier type such as '<NSCopying>', which is
-  /// an anachronistic way of writing 'id<NSCopying>'.
-  TypeResult parseObjCProtocolQualifierType(SourceLocation &rAngleLoc);
-
-  /// Parse Objective-C type arguments and protocol qualifiers, extending the
-  /// current type with the parsed result.
-  TypeResult parseObjCTypeArgsAndProtocolQualifiers(SourceLocation loc,
-                                                    ParsedType type,
-                                                    bool consumeLastToken,
-                                                    SourceLocation &endLoc);
-
-  /// \verbatim
-  ///   objc-interface-decl-list:
-  ///     empty
-  ///     objc-interface-decl-list objc-property-decl [OBJC2]
-  ///     objc-interface-decl-list objc-method-requirement [OBJC2]
-  ///     objc-interface-decl-list objc-method-proto ';'
-  ///     objc-interface-decl-list declaration
-  ///     objc-interface-decl-list ';'
-  ///
-  ///   objc-method-requirement: [OBJC2]
-  ///     @required
-  ///     @optional
-  /// \endverbatim
-  ///
-  void ParseObjCInterfaceDeclList(tok::ObjCKeywordKind contextKey, Decl *CDecl);
-
-  /// \verbatim
-  ///   objc-protocol-declaration:
-  ///     objc-protocol-definition
-  ///     objc-protocol-forward-reference
-  ///
-  ///   objc-protocol-definition:
-  ///     \@protocol identifier
-  ///       objc-protocol-refs[opt]
-  ///       objc-interface-decl-list
-  ///     \@end
-  ///
-  ///   objc-protocol-forward-reference:
-  ///     \@protocol identifier-list ';'
-  /// \endverbatim
-  ///
-  ///   "\@protocol identifier ;" should be resolved as "\@protocol
-  ///   identifier-list ;": objc-interface-decl-list may not start with a
-  ///   semicolon in the first alternative if objc-protocol-refs are omitted.
-  DeclGroupPtrTy ParseObjCAtProtocolDeclaration(SourceLocation atLoc,
-                                                ParsedAttributes &prefixAttrs);
-
-  struct ObjCImplParsingDataRAII {
-    Parser &P;
-    Decl *Dcl;
-    bool HasCFunction;
-    typedef SmallVector<LexedMethod *, 8> LateParsedObjCMethodContainer;
-    LateParsedObjCMethodContainer LateParsedObjCMethods;
-
-    ObjCImplParsingDataRAII(Parser &parser, Decl *D)
-        : P(parser), Dcl(D), HasCFunction(false) {
-      P.CurParsedObjCImpl = this;
-      Finished = false;
-    }
-    ~ObjCImplParsingDataRAII();
-
-    void finish(SourceRange AtEnd);
-    bool isFinished() const { return Finished; }
-
-  private:
-    bool Finished;
-  };
-  ObjCImplParsingDataRAII *CurParsedObjCImpl;
-
-  /// StashAwayMethodOrFunctionBodyTokens -  Consume the tokens and store them
-  /// for later parsing.
-  void StashAwayMethodOrFunctionBodyTokens(Decl *MDecl);
-
-  /// \verbatim
-  ///   objc-implementation:
-  ///     objc-class-implementation-prologue
-  ///     objc-category-implementation-prologue
-  ///
-  ///   objc-class-implementation-prologue:
-  ///     @implementation identifier objc-superclass[opt]
-  ///       objc-class-instance-variables[opt]
-  ///
-  ///   objc-category-implementation-prologue:
-  ///     @implementation identifier ( identifier )
-  /// \endverbatim
-  DeclGroupPtrTy ParseObjCAtImplementationDeclaration(SourceLocation AtLoc,
-                                                      ParsedAttributes &Attrs);
-  DeclGroupPtrTy ParseObjCAtEndDeclaration(SourceRange atEnd);
-
-  /// \verbatim
-  ///   compatibility-alias-decl:
-  ///     @compatibility_alias alias-name  class-name ';'
-  /// \endverbatim
-  ///
-  Decl *ParseObjCAtAliasDeclaration(SourceLocation atLoc);
-
-  /// \verbatim
-  ///   property-synthesis:
-  ///     @synthesize property-ivar-list ';'
-  ///
-  ///   property-ivar-list:
-  ///     property-ivar
-  ///     property-ivar-list ',' property-ivar
-  ///
-  ///   property-ivar:
-  ///     identifier
-  ///     identifier '=' identifier
-  /// \endverbatim
-  ///
-  Decl *ParseObjCPropertySynthesize(SourceLocation atLoc);
-
-  /// \verbatim
-  ///   property-dynamic:
-  ///     @dynamic  property-list
-  ///
-  ///   property-list:
-  ///     identifier
-  ///     property-list ',' identifier
-  /// \endverbatim
-  ///
-  Decl *ParseObjCPropertyDynamic(SourceLocation atLoc);
-
-  /// \verbatim
-  ///   objc-selector:
-  ///     identifier
-  ///     one of
-  ///       enum struct union if else while do for switch case default
-  ///       break continue return goto asm sizeof typeof __alignof
-  ///       unsigned long const short volatile signed restrict _Complex
-  ///       in out inout bycopy byref oneway int char float double void _Bool
-  /// \endverbatim
-  ///
-  IdentifierInfo *ParseObjCSelectorPiece(SourceLocation &MethodLocation);
-
-  IdentifierInfo *ObjCTypeQuals[llvm::to_underlying(ObjCTypeQual::NumQuals)];
-
-  /// \verbatim
-  ///  objc-for-collection-in: 'in'
-  /// \endverbatim
-  ///
-  bool isTokIdentifier_in() const;
-
-  /// \verbatim
-  ///   objc-type-name:
-  ///     '(' objc-type-qualifiers[opt] type-name ')'
-  ///     '(' objc-type-qualifiers[opt] ')'
-  /// \endverbatim
-  ///
-  ParsedType ParseObjCTypeName(ObjCDeclSpec &DS, DeclaratorContext Ctx,
-                               ParsedAttributes *ParamAttrs);
-
-  /// \verbatim
-  ///   objc-method-proto:
-  ///     objc-instance-method objc-method-decl objc-method-attributes[opt]
-  ///     objc-class-method objc-method-decl objc-method-attributes[opt]
-  ///
-  ///   objc-instance-method: '-'
-  ///   objc-class-method: '+'
-  ///
-  ///   objc-method-attributes:         [OBJC2]
-  ///     __attribute__((deprecated))
-  /// \endverbatim
-  ///
-  Decl *ParseObjCMethodPrototype(
-      tok::ObjCKeywordKind MethodImplKind = tok::objc_not_keyword,
-      bool MethodDefinition = true);
-
-  /// \verbatim
-  ///   objc-method-decl:
-  ///     objc-selector
-  ///     objc-keyword-selector objc-parmlist[opt]
-  ///     objc-type-name objc-selector
-  ///     objc-type-name objc-keyword-selector objc-parmlist[opt]
-  ///
-  ///   objc-keyword-selector:
-  ///     objc-keyword-decl
-  ///     objc-keyword-selector objc-keyword-decl
-  ///
-  ///   objc-keyword-decl:
-  ///     objc-selector ':' objc-type-name objc-keyword-attributes[opt] identifier
-  ///     objc-selector ':' objc-keyword-attributes[opt] identifier
-  ///     ':' objc-type-name objc-keyword-attributes[opt] identifier
-  ///     ':' objc-keyword-attributes[opt] identifier
-  ///
-  ///   objc-parmlist:
-  ///     objc-parms objc-ellipsis[opt]
-  ///
-  ///   objc-parms:
-  ///     objc-parms , parameter-declaration
-  ///
-  ///   objc-ellipsis:
-  ///     , ...
-  ///
-  ///   objc-keyword-attributes:         [OBJC2]
-  ///     __attribute__((unused))
-  /// \endverbatim
-  ///
-  Decl *ParseObjCMethodDecl(
-      SourceLocation mLoc, tok::TokenKind mType,
-      tok::ObjCKeywordKind MethodImplKind = tok::objc_not_keyword,
-      bool MethodDefinition = true);
-
-  ///   Parse property attribute declarations.
-  ///
-  /// \verbatim
-  ///   property-attr-decl: '(' property-attrlist ')'
-  ///   property-attrlist:
-  ///     property-attribute
-  ///     property-attrlist ',' property-attribute
-  ///   property-attribute:
-  ///     getter '=' identifier
-  ///     setter '=' identifier ':'
-  ///     direct
-  ///     readonly
-  ///     readwrite
-  ///     assign
-  ///     retain
-  ///     copy
-  ///     nonatomic
-  ///     atomic
-  ///     strong
-  ///     weak
-  ///     unsafe_unretained
-  ///     nonnull
-  ///     nullable
-  ///     null_unspecified
-  ///     null_resettable
-  ///     class
-  /// \endverbatim
-  ///
-  void ParseObjCPropertyAttribute(ObjCDeclSpec &DS);
-
-  /// \verbatim
-  ///   objc-method-def: objc-method-proto ';'[opt] '{' body '}'
-  /// \endverbatim
-  ///
-  Decl *ParseObjCMethodDefinition();
-
-  //===--------------------------------------------------------------------===//
-  // Objective-C Expressions
-  ExprResult ParseObjCAtExpression(SourceLocation AtLocation);
-  ExprResult ParseObjCStringLiteral(SourceLocation AtLoc);
-
-  /// ParseObjCCharacterLiteral -
-  /// \verbatim
-  /// objc-scalar-literal : '@' character-literal
-  ///                        ;
-  /// \endverbatim
-  ExprResult ParseObjCCharacterLiteral(SourceLocation AtLoc);
-
-  /// ParseObjCNumericLiteral -
-  /// \verbatim
-  /// objc-scalar-literal : '@' scalar-literal
-  ///                        ;
-  /// scalar-literal : | numeric-constant			/* any numeric constant. */
-  ///                    ;
-  /// \endverbatim
-  ExprResult ParseObjCNumericLiteral(SourceLocation AtLoc);
-
-  /// ParseObjCBooleanLiteral -
-  /// \verbatim
-  /// objc-scalar-literal : '@' boolean-keyword
-  ///                        ;
-  /// boolean-keyword: 'true' | 'false' | '__objc_yes' | '__objc_no'
-  ///                        ;
-  /// \endverbatim
-  ExprResult ParseObjCBooleanLiteral(SourceLocation AtLoc, bool ArgValue);
-
-  ExprResult ParseObjCArrayLiteral(SourceLocation AtLoc);
-  ExprResult ParseObjCDictionaryLiteral(SourceLocation AtLoc);
-
-  /// ParseObjCBoxedExpr -
-  /// \verbatim
-  /// objc-box-expression:
-  ///       @( assignment-expression )
-  /// \endverbatim
-  ExprResult ParseObjCBoxedExpr(SourceLocation AtLoc);
-
-  /// \verbatim
-  ///    objc-encode-expression:
-  ///      \@encode ( type-name )
-  /// \endverbatim
-  ExprResult ParseObjCEncodeExpression(SourceLocation AtLoc);
-
-  /// \verbatim
-  ///     objc-selector-expression
-  ///       @selector '(' '('[opt] objc-keyword-selector ')'[opt] ')'
-  /// \endverbatim
-  ExprResult ParseObjCSelectorExpression(SourceLocation AtLoc);
-
-  /// \verbatim
-  ///     objc-protocol-expression
-  ///       \@protocol ( protocol-name )
-  /// \endverbatim
-  ExprResult ParseObjCProtocolExpression(SourceLocation AtLoc);
-
-  /// Determine whether the parser is currently referring to a an
-  /// Objective-C message send, using a simplified heuristic to avoid overhead.
-  ///
-  /// This routine will only return true for a subset of valid message-send
-  /// expressions.
-  bool isSimpleObjCMessageExpression();
-
-  /// \verbatim
-  ///   objc-message-expr:
-  ///     '[' objc-receiver objc-message-args ']'
-  ///
-  ///   objc-receiver: [C]
-  ///     'super'
-  ///     expression
-  ///     class-name
-  ///     type-name
-  /// \endverbatim
-  ///
-  ExprResult ParseObjCMessageExpression();
-
-  /// Parse the remainder of an Objective-C message following the
-  /// '[' objc-receiver.
-  ///
-  /// This routine handles sends to super, class messages (sent to a
-  /// class name), and instance messages (sent to an object), and the
-  /// target is represented by \p SuperLoc, \p ReceiverType, or \p
-  /// ReceiverExpr, respectively. Only one of these parameters may have
-  /// a valid value.
-  ///
-  /// \param LBracLoc The location of the opening '['.
-  ///
-  /// \param SuperLoc If this is a send to 'super', the location of the
-  /// 'super' keyword that indicates a send to the superclass.
-  ///
-  /// \param ReceiverType If this is a class message, the type of the
-  /// class we are sending a message to.
-  ///
-  /// \param ReceiverExpr If this is an instance message, the expression
-  /// used to compute the receiver object.
-  ///
-  /// \verbatim
-  ///   objc-message-args:
-  ///     objc-selector
-  ///     objc-keywordarg-list
-  ///
-  ///   objc-keywordarg-list:
-  ///     objc-keywordarg
-  ///     objc-keywordarg-list objc-keywordarg
-  ///
-  ///   objc-keywordarg:
-  ///     selector-name[opt] ':' objc-keywordexpr
-  ///
-  ///   objc-keywordexpr:
-  ///     nonempty-expr-list
-  ///
-  ///   nonempty-expr-list:
-  ///     assignment-expression
-  ///     nonempty-expr-list , assignment-expression
-  /// \endverbatim
-  ///
-  ExprResult ParseObjCMessageExpressionBody(SourceLocation LBracloc,
-                                            SourceLocation SuperLoc,
-                                            ParsedType ReceiverType,
-                                            Expr *ReceiverExpr);
-
-  /// Parse the receiver of an Objective-C++ message send.
-  ///
-  /// This routine parses the receiver of a message send in
-  /// Objective-C++ either as a type or as an expression. Note that this
-  /// routine must not be called to parse a send to 'super', since it
-  /// has no way to return such a result.
-  ///
-  /// \param IsExpr Whether the receiver was parsed as an expression.
-  ///
-  /// \param TypeOrExpr If the receiver was parsed as an expression (\c
-  /// IsExpr is true), the parsed expression. If the receiver was parsed
-  /// as a type (\c IsExpr is false), the parsed type.
-  ///
-  /// \returns True if an error occurred during parsing or semantic
-  /// analysis, in which case the arguments do not have valid
-  /// values. Otherwise, returns false for a successful parse.
-  ///
-  /// \verbatim
-  ///   objc-receiver: [C++]
-  ///     'super' [not parsed here]
-  ///     expression
-  ///     simple-type-specifier
-  ///     typename-specifier
-  /// \endverbatim
-  bool ParseObjCXXMessageReceiver(bool &IsExpr, void *&TypeOrExpr);
-
-  //===--------------------------------------------------------------------===//
-  // Objective-C Statements
-
-  enum class ParsedStmtContext;
-
-  StmtResult ParseObjCAtStatement(SourceLocation atLoc,
-                                  ParsedStmtContext StmtCtx);
-
-  /// \verbatim
-  ///  objc-try-catch-statement:
-  ///    @try compound-statement objc-catch-list[opt]
-  ///    @try compound-statement objc-catch-list[opt] @finally compound-statement
-  ///
-  ///  objc-catch-list:
-  ///    @catch ( parameter-declaration ) compound-statement
-  ///    objc-catch-list @catch ( catch-parameter-declaration ) compound-statement
-  ///  catch-parameter-declaration:
-  ///     parameter-declaration
-  ///     '...' [OBJC2]
-  /// \endverbatim
-  ///
-  StmtResult ParseObjCTryStmt(SourceLocation atLoc);
-
-  /// \verbatim
-  ///  objc-throw-statement:
-  ///    throw expression[opt];
-  /// \endverbatim
-  ///
-  StmtResult ParseObjCThrowStmt(SourceLocation atLoc);
-
-  /// \verbatim
-  /// objc-synchronized-statement:
-  ///   @synchronized '(' expression ')' compound-statement
-  /// \endverbatim
-  ///
-  StmtResult ParseObjCSynchronizedStmt(SourceLocation atLoc);
-
-  /// \verbatim
-  /// objc-autoreleasepool-statement:
-  ///   @autoreleasepool compound-statement
-  /// \endverbatim
-  ///
-  StmtResult ParseObjCAutoreleasePoolStmt(SourceLocation atLoc);
-
-  /// ParseObjCTypeQualifierList - This routine parses the objective-c's type
-  /// qualifier list and builds their bitmask representation in the input
-  /// argument.
-  ///
-  /// \verbatim
-  ///   objc-type-qualifiers:
-  ///     objc-type-qualifier
-  ///     objc-type-qualifiers objc-type-qualifier
-  ///
-  ///   objc-type-qualifier:
-  ///     'in'
-  ///     'out'
-  ///     'inout'
-  ///     'oneway'
-  ///     'bycopy's
-  ///     'byref'
-  ///     'nonnull'
-  ///     'nullable'
-  ///     'null_unspecified'
-  /// \endverbatim
-  ///
-  void ParseObjCTypeQualifierList(ObjCDeclSpec &DS, DeclaratorContext Context);
-
-  /// Determine whether we are currently at the start of an Objective-C
-  /// class message that appears to be missing the open bracket '['.
-  bool isStartOfObjCClassMessageMissingOpenBracket();
-
-  ///@}
-
-  //
-  //
-  // -------------------------------------------------------------------------
-  //
-  //
-
-  /// \name OpenACC Constructs
-  /// Implementations are in ParseOpenACC.cpp
-  ///@{
-
-public:
-  friend class ParsingOpenACCDirectiveRAII;
-
-  /// Parse OpenACC directive on a declaration.
-  ///
-  /// Placeholder for now, should just ignore the directives after emitting a
-  /// diagnostic. Eventually will be split into a few functions to parse
-  /// different situations.
-  DeclGroupPtrTy ParseOpenACCDirectiveDecl(AccessSpecifier &AS,
-                                           ParsedAttributes &Attrs,
-                                           DeclSpec::TST TagType,
-                                           Decl *TagDecl);
-
-  // Parse OpenACC Directive on a Statement.
-  StmtResult ParseOpenACCDirectiveStmt();
-
-private:
-  /// Parsing OpenACC directive mode.
-  bool OpenACCDirectiveParsing = false;
-
-  /// Currently parsing a situation where an OpenACC array section could be
-  /// legal, such as a 'var-list'.
-  bool AllowOpenACCArraySections = false;
-
-  /// RAII object to set reset OpenACC parsing a context where Array Sections
-  /// are allowed.
-  class OpenACCArraySectionRAII {
-    Parser &P;
-
-  public:
-    OpenACCArraySectionRAII(Parser &P) : P(P) {
-      assert(!P.AllowOpenACCArraySections);
-      P.AllowOpenACCArraySections = true;
-    }
-    ~OpenACCArraySectionRAII() {
-      assert(P.AllowOpenACCArraySections);
-      P.AllowOpenACCArraySections = false;
-    }
-  };
-
-  /// A struct to hold the information that got parsed by ParseOpenACCDirective,
-  /// so that the callers of it can use that to construct the appropriate AST
-  /// nodes.
-  struct OpenACCDirectiveParseInfo {
-    OpenACCDirectiveKind DirKind;
-    SourceLocation StartLoc;
-    SourceLocation DirLoc;
-    SourceLocation LParenLoc;
-    SourceLocation RParenLoc;
-    SourceLocation EndLoc;
-    SourceLocation MiscLoc;
-    OpenACCAtomicKind AtomicKind;
-    SmallVector<Expr *> Exprs;
-    SmallVector<OpenACCClause *> Clauses;
-    // TODO OpenACC: As we implement support for the Atomic, Routine, and Cache
-    // constructs, we likely want to put that information in here as well.
-  };
-
-  struct OpenACCWaitParseInfo {
-    bool Failed = false;
-    Expr *DevNumExpr = nullptr;
-    SourceLocation QueuesLoc;
-    SmallVector<Expr *> QueueIdExprs;
-
-    SmallVector<Expr *> getAllExprs() {
-      SmallVector<Expr *> Out;
-      Out.push_back(DevNumExpr);
-      llvm::append_range(Out, QueueIdExprs);
-      return Out;
-    }
-  };
-  struct OpenACCCacheParseInfo {
-    bool Failed = false;
-    SourceLocation ReadOnlyLoc;
-    SmallVector<Expr *> Vars;
-  };
-
-  /// Represents the 'error' state of parsing an OpenACC Clause, and stores
-  /// whether we can continue parsing, or should give up on the directive.
-  enum class OpenACCParseCanContinue { Cannot = 0, Can = 1 };
-
-  /// A type to represent the state of parsing an OpenACC Clause. Situations
-  /// that result in an OpenACCClause pointer are a success and can continue
-  /// parsing, however some other situations can also continue.
-  /// FIXME: This is better represented as a std::expected when we get C++23.
-  using OpenACCClauseParseResult =
-      llvm::PointerIntPair<OpenACCClause *, 1, OpenACCParseCanContinue>;
-
-  OpenACCClauseParseResult OpenACCCanContinue();
-  OpenACCClauseParseResult OpenACCCannotContinue();
-  OpenACCClauseParseResult OpenACCSuccess(OpenACCClause *Clause);
-
-  /// Parses the OpenACC directive (the entire pragma) including the clause
-  /// list, but does not produce the main AST node.
-  OpenACCDirectiveParseInfo ParseOpenACCDirective();
-  /// Helper that parses an ID Expression based on the language options.
-  ExprResult ParseOpenACCIDExpression();
-
-  /// Parses the variable list for the `cache` construct.
-  ///
-  /// OpenACC 3.3, section 2.10:
-  /// In C and C++, the syntax of the cache directive is:
-  ///
-  /// #pragma acc cache ([readonly:]var-list) new-line
-  OpenACCCacheParseInfo ParseOpenACCCacheVarList();
-
-  /// Tries to parse the 'modifier-list' for a 'copy', 'copyin', 'copyout', or
-  /// 'create' clause.
-  OpenACCModifierKind tryParseModifierList(OpenACCClauseKind CK);
-
-  using OpenACCVarParseResult = std::pair<ExprResult, OpenACCParseCanContinue>;
-
-  /// Parses a single variable in a variable list for OpenACC.
-  ///
-  /// OpenACC 3.3, section 1.6:
-  /// In this spec, a 'var' (in italics) is one of the following:
-  /// - a variable name (a scalar, array, or composite variable name)
-  /// - a subarray specification with subscript ranges
-  /// - an array element
-  /// - a member of a composite variable
-  /// - a common block name between slashes (fortran only)
-  OpenACCVarParseResult ParseOpenACCVar(OpenACCDirectiveKind DK,
-                                        OpenACCClauseKind CK);
-
-  /// Parses the variable list for the variety of places that take a var-list.
-  llvm::SmallVector<Expr *> ParseOpenACCVarList(OpenACCDirectiveKind DK,
-                                                OpenACCClauseKind CK);
-
-  /// Parses any parameters for an OpenACC Clause, including required/optional
-  /// parens.
-  ///
-  /// The OpenACC Clause List is a comma or space-delimited list of clauses (see
-  /// the comment on ParseOpenACCClauseList).  The concept of a 'clause' doesn't
-  /// really have its owner grammar and each individual one has its own
-  /// definition. However, they all are named with a single-identifier (or
-  /// auto/default!) token, followed in some cases by either braces or parens.
-  OpenACCClauseParseResult
-  ParseOpenACCClauseParams(ArrayRef<const OpenACCClause *> ExistingClauses,
-                           OpenACCDirectiveKind DirKind, OpenACCClauseKind Kind,
-                           SourceLocation ClauseLoc);
-
-  /// Parses a single clause in a clause-list for OpenACC. Returns nullptr on
-  /// error.
-  OpenACCClauseParseResult
-  ParseOpenACCClause(ArrayRef<const OpenACCClause *> ExistingClauses,
-                     OpenACCDirectiveKind DirKind);
-
-  /// Parses the clause-list for an OpenACC directive.
-  ///
-  /// OpenACC 3.3, section 1.7:
-  /// To simplify the specification and convey appropriate constraint
-  /// information, a pqr-list is a comma-separated list of pdr items. The one
-  /// exception is a clause-list, which is a list of one or more clauses
-  /// optionally separated by commas.
-  SmallVector<OpenACCClause *>
-  ParseOpenACCClauseList(OpenACCDirectiveKind DirKind);
-
-  /// OpenACC 3.3, section 2.16:
-  /// In this section and throughout the specification, the term wait-argument
-  /// means:
-  /// \verbatim
-  /// [ devnum : int-expr : ] [ queues : ] async-argument-list
-  /// \endverbatim
-  OpenACCWaitParseInfo ParseOpenACCWaitArgument(SourceLocation Loc,
-                                                bool IsDirective);
-
-  /// Parses the clause of the 'bind' argument, which can be a string literal or
-  /// an identifier.
-  std::variant<std::monostate, StringLiteral *, IdentifierInfo *>
-  ParseOpenACCBindClauseArgument();
-
-  /// A type to represent the state of parsing after an attempt to parse an
-  /// OpenACC int-expr. This is useful to determine whether an int-expr list can
-  /// continue parsing after a failed int-expr.
-  using OpenACCIntExprParseResult =
-      std::pair<ExprResult, OpenACCParseCanContinue>;
-  /// Parses the clause kind of 'int-expr', which can be any integral
-  /// expression.
-  OpenACCIntExprParseResult ParseOpenACCIntExpr(OpenACCDirectiveKind DK,
-                                                OpenACCClauseKind CK,
-                                                SourceLocation Loc);
-  /// Parses the argument list for 'num_gangs', which allows up to 3
-  /// 'int-expr's.
-  bool ParseOpenACCIntExprList(OpenACCDirectiveKind DK, OpenACCClauseKind CK,
-                               SourceLocation Loc,
-                               llvm::SmallVectorImpl<Expr *> &IntExprs);
-
-  /// Parses the 'device-type-list', which is a list of identifiers.
-  ///
-  /// OpenACC 3.3 Section 2.4:
-  /// The argument to the device_type clause is a comma-separated list of one or
-  /// more device architecture name identifiers, or an asterisk.
-  ///
-  /// The syntax of the device_type clause is
-  /// device_type( * )
-  /// device_type( device-type-list )
-  ///
-  /// The device_type clause may be abbreviated to dtype.
-  bool ParseOpenACCDeviceTypeList(llvm::SmallVector<IdentifierLoc> &Archs);
-
-  /// Parses the 'async-argument', which is an integral value with two
-  /// 'special' values that are likely negative (but come from Macros).
-  ///
-  /// OpenACC 3.3 section 2.16:
-  /// In this section and throughout the specification, the term async-argument
-  /// means a nonnegative scalar integer expression (int for C or C++, integer
-  /// for Fortran), or one of the special values acc_async_noval or
-  /// acc_async_sync, as defined in the C header file and the Fortran openacc
-  /// module. The special values are negative values, so as not to conflict with
-  /// a user-specified nonnegative async-argument.
-  OpenACCIntExprParseResult ParseOpenACCAsyncArgument(OpenACCDirectiveKind DK,
-                                                      OpenACCClauseKind CK,
-                                                      SourceLocation Loc);
-
-  /// Parses the 'size-expr', which is an integral value, or an asterisk.
-  /// Asterisk is represented by a OpenACCAsteriskSizeExpr
-  ///
-  /// OpenACC 3.3 Section 2.9:
-  /// size-expr is one of:
-  ///    *
-  ///    int-expr
-  /// Note that this is specified under 'gang-arg-list', but also applies to
-  /// 'tile' via reference.
-  ExprResult ParseOpenACCSizeExpr(OpenACCClauseKind CK);
-
-  /// Parses a comma delimited list of 'size-expr's.
-  bool ParseOpenACCSizeExprList(OpenACCClauseKind CK,
-                                llvm::SmallVectorImpl<Expr *> &SizeExprs);
-
-  /// Parses a 'gang-arg-list', used for the 'gang' clause.
-  ///
-  /// OpenACC 3.3 Section 2.9:
-  ///
-  /// where gang-arg is one of:
-  /// \verbatim
-  /// [num:]int-expr
-  /// dim:int-expr
-  /// static:size-expr
-  /// \endverbatim
-  bool ParseOpenACCGangArgList(SourceLocation GangLoc,
-                               llvm::SmallVectorImpl<OpenACCGangKind> &GKs,
-                               llvm::SmallVectorImpl<Expr *> &IntExprs);
-
-  using OpenACCGangArgRes = std::pair<OpenACCGangKind, ExprResult>;
-  /// Parses a 'gang-arg', used for the 'gang' clause. Returns a pair of the
-  /// ExprResult (which contains the validity of the expression), plus the gang
-  /// kind for the current argument.
-  OpenACCGangArgRes ParseOpenACCGangArg(SourceLocation GangLoc);
-  /// Parses a 'condition' expr, ensuring it results in a
-  ExprResult ParseOpenACCConditionExpr();
-  DeclGroupPtrTy
-  ParseOpenACCAfterRoutineDecl(AccessSpecifier &AS, ParsedAttributes &Attrs,
-                               DeclSpec::TST TagType, Decl *TagDecl,
-                               OpenACCDirectiveParseInfo &DirInfo);
-  StmtResult ParseOpenACCAfterRoutineStmt(OpenACCDirectiveParseInfo &DirInfo);
-
-  ///@}
-
-  //
-  //
-  // -------------------------------------------------------------------------
-  //
-  //
-
-  /// \name OpenMP Constructs
-  /// Implementations are in ParseOpenMP.cpp
-  ///@{
-
-private:
-  friend class ParsingOpenMPDirectiveRAII;
-
-  /// Parsing OpenMP directive mode.
-  bool OpenMPDirectiveParsing = false;
-
-  /// Current kind of OpenMP clause
-  OpenMPClauseKind OMPClauseKind = llvm::omp::OMPC_unknown;
-
-  void ReplayOpenMPAttributeTokens(CachedTokens &OpenMPTokens) {
-    // If parsing the attributes found an OpenMP directive, emit those tokens
-    // to the parse stream now.
-    if (!OpenMPTokens.empty()) {
-      PP.EnterToken(Tok, /*IsReinject*/ true);
-      PP.EnterTokenStream(OpenMPTokens, /*DisableMacroExpansion*/ true,
-                          /*IsReinject*/ true);
-      ConsumeAnyToken(/*ConsumeCodeCompletionTok*/ true);
-    }
-  }
-
-  //===--------------------------------------------------------------------===//
-  // OpenMP: Directives and clauses.
-
-  /// Parse clauses for '#pragma omp declare simd'.
-  DeclGroupPtrTy ParseOMPDeclareSimdClauses(DeclGroupPtrTy Ptr,
-                                            CachedTokens &Toks,
-                                            SourceLocation Loc);
-
-  /// Parse a property kind into \p TIProperty for the selector set \p Set and
-  /// selector \p Selector.
-  void parseOMPTraitPropertyKind(OMPTraitProperty &TIProperty,
-                                 llvm::omp::TraitSet Set,
-                                 llvm::omp::TraitSelector Selector,
-                                 llvm::StringMap<SourceLocation> &Seen);
-
-  /// Parse a selector kind into \p TISelector for the selector set \p Set.
-  void parseOMPTraitSelectorKind(OMPTraitSelector &TISelector,
-                                 llvm::omp::TraitSet Set,
-                                 llvm::StringMap<SourceLocation> &Seen);
-
-  /// Parse a selector set kind into \p TISet.
-  void parseOMPTraitSetKind(OMPTraitSet &TISet,
-                            llvm::StringMap<SourceLocation> &Seen);
-
-  /// Parses an OpenMP context property.
-  void parseOMPContextProperty(OMPTraitSelector &TISelector,
-                               llvm::omp::TraitSet Set,
-                               llvm::StringMap<SourceLocation> &Seen);
-
-  /// Parses an OpenMP context selector.
-  ///
-  /// \verbatim
-  /// <trait-selector-name> ['('[<trait-score>] <trait-property> [, <t-p>]* ')']
-  /// \endverbatim
-  void parseOMPContextSelector(OMPTraitSelector &TISelector,
-                               llvm::omp::TraitSet Set,
-                               llvm::StringMap<SourceLocation> &SeenSelectors);
-
-  /// Parses an OpenMP context selector set.
-  ///
-  /// \verbatim
-  /// <trait-set-selector-name> '=' '{' <trait-selector> [, <trait-selector>]* '}'
-  /// \endverbatim
-  void parseOMPContextSelectorSet(OMPTraitSet &TISet,
-                                  llvm::StringMap<SourceLocation> &SeenSets);
-
-  /// Parse OpenMP context selectors:
-  ///
-  /// \verbatim
-  /// <trait-set-selector> [, <trait-set-selector>]*
-  /// \endverbatim
-  bool parseOMPContextSelectors(SourceLocation Loc, OMPTraitInfo &TI);
-
-  /// Parse an 'append_args' clause for '#pragma omp declare variant'.
-  bool parseOpenMPAppendArgs(SmallVectorImpl<OMPInteropInfo> &InteropInfos);
-
-  /// Parse a `match` clause for an '#pragma omp declare variant'. Return true
-  /// if there was an error.
-  bool parseOMPDeclareVariantMatchClause(SourceLocation Loc, OMPTraitInfo &TI,
-                                         OMPTraitInfo *ParentTI);
-
-  /// Parse clauses for '#pragma omp declare variant ( variant-func-id )
-  /// clause'.
-  void ParseOMPDeclareVariantClauses(DeclGroupPtrTy Ptr, CachedTokens &Toks,
-                                     SourceLocation Loc);
-
-  /// Parse 'omp [begin] assume[s]' directive.
-  ///
-  /// `omp assumes` or `omp begin/end assumes` <clause> [[,]<clause>]...
-  /// where
-  ///
-  /// \verbatim
-  ///   clause:
-  ///     'ext_IMPL_DEFINED'
-  ///     'absent' '(' directive-name [, directive-name]* ')'
-  ///     'contains' '(' directive-name [, directive-name]* ')'
-  ///     'holds' '(' scalar-expression ')'
-  ///     'no_openmp'
-  ///     'no_openmp_routines'
-  ///     'no_openmp_constructs' (OpenMP 6.0)
-  ///     'no_parallelism'
-  /// \endverbatim
-  ///
-  void ParseOpenMPAssumesDirective(OpenMPDirectiveKind DKind,
-                                   SourceLocation Loc);
-
-  /// Parse 'omp end assumes' directive.
-  void ParseOpenMPEndAssumesDirective(SourceLocation Loc);
-
-  /// Parses clauses for directive.
-  ///
-  /// \verbatim
-  /// <clause> [clause[ [,] clause] ... ]
-  ///
-  ///  clauses: for error directive
-  ///     'at' '(' compilation | execution ')'
-  ///     'severity' '(' fatal | warning ')'
-  ///     'message' '(' msg-string ')'
-  /// ....
-  /// \endverbatim
-  ///
-  /// \param DKind Kind of current directive.
-  /// \param clauses for current directive.
-  /// \param start location for clauses of current directive
-  void ParseOpenMPClauses(OpenMPDirectiveKind DKind,
-                          SmallVectorImpl<clang::OMPClause *> &Clauses,
-                          SourceLocation Loc);
-
-  /// Parse clauses for '#pragma omp [begin] declare target'.
-  void ParseOMPDeclareTargetClauses(SemaOpenMP::DeclareTargetContextInfo &DTCI);
-
-  /// Parse '#pragma omp end declare target'.
-  void ParseOMPEndDeclareTargetDirective(OpenMPDirectiveKind BeginDKind,
-                                         OpenMPDirectiveKind EndDKind,
-                                         SourceLocation Loc);
-
-  /// Skip tokens until a `annot_pragma_openmp_end` was found. Emit a warning if
-  /// it is not the current token.
-  void skipUntilPragmaOpenMPEnd(OpenMPDirectiveKind DKind);
-
-  /// Check the \p FoundKind against the \p ExpectedKind, if not issue an error
-  /// that the "end" matching the "begin" directive of kind \p BeginKind was not
-  /// found. Finally, if the expected kind was found or if \p SkipUntilOpenMPEnd
-  /// is set, skip ahead using the helper `skipUntilPragmaOpenMPEnd`.
-  void parseOMPEndDirective(OpenMPDirectiveKind BeginKind,
-                            OpenMPDirectiveKind ExpectedKind,
-                            OpenMPDirectiveKind FoundKind,
-                            SourceLocation MatchingLoc, SourceLocation FoundLoc,
-                            bool SkipUntilOpenMPEnd);
-
-  /// Parses declarative OpenMP directives.
-  ///
-  /// \verbatim
-  ///       threadprivate-directive:
-  ///         annot_pragma_openmp 'threadprivate' simple-variable-list
-  ///         annot_pragma_openmp_end
-  ///
-  ///       allocate-directive:
-  ///         annot_pragma_openmp 'allocate' simple-variable-list [<clause>]
-  ///         annot_pragma_openmp_end
-  ///
-  ///       declare-reduction-directive:
-  ///        annot_pragma_openmp 'declare' 'reduction' [...]
-  ///        annot_pragma_openmp_end
-  ///
-  ///       declare-mapper-directive:
-  ///         annot_pragma_openmp 'declare' 'mapper' '(' [<mapper-identifer> ':']
-  ///         <type> <var> ')' [<clause>[[,] <clause>] ... ]
-  ///         annot_pragma_openmp_end
-  ///
-  ///       declare-simd-directive:
-  ///         annot_pragma_openmp 'declare simd' {<clause> [,]}
-  ///         annot_pragma_openmp_end
-  ///         <function declaration/definition>
-  ///
-  ///       requires directive:
-  ///         annot_pragma_openmp 'requires' <clause> [[[,] <clause>] ... ]
-  ///         annot_pragma_openmp_end
-  ///
-  ///       assumes directive:
-  ///         annot_pragma_openmp 'assumes' <clause> [[[,] <clause>] ... ]
-  ///         annot_pragma_openmp_end
-  ///       or
-  ///         annot_pragma_openmp 'begin assumes' <clause> [[[,] <clause>] ... ]
-  ///         annot_pragma_openmp 'end assumes'
-  ///         annot_pragma_openmp_end
-  /// \endverbatim
-  ///
-  DeclGroupPtrTy ParseOpenMPDeclarativeDirectiveWithExtDecl(
-      AccessSpecifier &AS, ParsedAttributes &Attrs, bool Delayed = false,
-      DeclSpec::TST TagType = DeclSpec::TST_unspecified,
-      Decl *TagDecl = nullptr);
-
-  /// Parse 'omp declare reduction' construct.
-  ///
-  /// \verbatim
-  ///       declare-reduction-directive:
-  ///        annot_pragma_openmp 'declare' 'reduction'
-  ///        '(' <reduction_id> ':' <type> {',' <type>} ':' <expression> ')'
-  ///        ['initializer' '(' ('omp_priv' '=' <expression>)|<function_call> ')']
-  ///        annot_pragma_openmp_end
-  /// \endverbatim
-  /// <reduction_id> is either a base language identifier or one of the
-  /// following operators: '+', '-', '*', '&', '|', '^', '&&' and '||'.
-  ///
-  DeclGroupPtrTy ParseOpenMPDeclareReductionDirective(AccessSpecifier AS);
-
-  /// Parses initializer for provided omp_priv declaration inside the reduction
-  /// initializer.
-  void ParseOpenMPReductionInitializerForDecl(VarDecl *OmpPrivParm);
-
-  /// Parses 'omp declare mapper' directive.
-  ///
-  /// \verbatim
-  ///       declare-mapper-directive:
-  ///         annot_pragma_openmp 'declare' 'mapper' '(' [<mapper-identifier> ':']
-  ///         <type> <var> ')' [<clause>[[,] <clause>] ... ]
-  ///         annot_pragma_openmp_end
-  /// \endverbatim
-  /// <mapper-identifier> and <var> are base language identifiers.
-  ///
-  DeclGroupPtrTy ParseOpenMPDeclareMapperDirective(AccessSpecifier AS);
-
-  /// Parses variable declaration in 'omp declare mapper' directive.
-  TypeResult parseOpenMPDeclareMapperVarDecl(SourceRange &Range,
-                                             DeclarationName &Name,
-                                             AccessSpecifier AS = AS_none);
-
-  /// Parses simple list of variables.
-  ///
-  /// \verbatim
-  ///   simple-variable-list:
-  ///         '(' id-expression {, id-expression} ')'
-  /// \endverbatim
-  ///
-  /// \param Kind Kind of the directive.
-  /// \param Callback Callback function to be called for the list elements.
-  /// \param AllowScopeSpecifier true, if the variables can have fully
-  /// qualified names.
-  ///
-  bool ParseOpenMPSimpleVarList(
-      OpenMPDirectiveKind Kind,
-      const llvm::function_ref<void(CXXScopeSpec &, DeclarationNameInfo)>
-          &Callback,
-      bool AllowScopeSpecifier);
-
-  /// Parses declarative or executable directive.
-  ///
-  /// \verbatim
-  ///       threadprivate-directive:
-  ///         annot_pragma_openmp 'threadprivate' simple-variable-list
-  ///         annot_pragma_openmp_end
-  ///
-  ///       allocate-directive:
-  ///         annot_pragma_openmp 'allocate' simple-variable-list
-  ///         annot_pragma_openmp_end
-  ///
-  ///       declare-reduction-directive:
-  ///         annot_pragma_openmp 'declare' 'reduction' '(' <reduction_id> ':'
-  ///         <type> {',' <type>} ':' <expression> ')' ['initializer' '('
-  ///         ('omp_priv' '=' <expression>|<function_call>) ')']
-  ///         annot_pragma_openmp_end
-  ///
-  ///       declare-mapper-directive:
-  ///         annot_pragma_openmp 'declare' 'mapper' '(' [<mapper-identifer> ':']
-  ///         <type> <var> ')' [<clause>[[,] <clause>] ... ]
-  ///         annot_pragma_openmp_end
-  ///
-  ///       executable-directive:
-  ///         annot_pragma_openmp 'parallel' | 'simd' | 'for' | 'sections' |
-  ///         'section' | 'single' | 'master' | 'critical' [ '(' <name> ')' ] |
-  ///         'parallel for' | 'parallel sections' | 'parallel master' | 'task'
-  ///         | 'taskyield' | 'barrier' | 'taskwait' | 'flush' | 'ordered' |
-  ///         'error' | 'atomic' | 'for simd' | 'parallel for simd' | 'target' |
-  ///         'target data' | 'taskgroup' | 'teams' | 'taskloop' | 'taskloop
-  ///         simd' | 'master taskloop' | 'master taskloop simd' | 'parallel
-  ///         master taskloop' | 'parallel master taskloop simd' | 'distribute'
-  ///         | 'target enter data' | 'target exit data' | 'target parallel' |
-  ///         'target parallel for' | 'target update' | 'distribute parallel
-  ///         for' | 'distribute paralle for simd' | 'distribute simd' | 'target
-  ///         parallel for simd' | 'target simd' | 'teams distribute' | 'teams
-  ///         distribute simd' | 'teams distribute parallel for simd' | 'teams
-  ///         distribute parallel for' | 'target teams' | 'target teams
-  ///         distribute' | 'target teams distribute parallel for' | 'target
-  ///         teams distribute parallel for simd' | 'target teams distribute
-  ///         simd' | 'masked' | 'parallel masked' {clause}
-  ///         annot_pragma_openmp_end
-  /// \endverbatim
-  ///
-  ///
-  /// \param StmtCtx The context in which we're parsing the directive.
-  /// \param ReadDirectiveWithinMetadirective true if directive is within a
-  /// metadirective and therefore ends on the closing paren.
-  StmtResult ParseOpenMPDeclarativeOrExecutableDirective(
-      ParsedStmtContext StmtCtx, bool ReadDirectiveWithinMetadirective = false);
-
-  /// Parses executable directive.
-  ///
-  /// \param StmtCtx The context in which we're parsing the directive.
-  /// \param DKind The kind of the executable directive.
-  /// \param Loc Source location of the beginning of the directive.
-  /// \param ReadDirectiveWithinMetadirective true if directive is within a
-  /// metadirective and therefore ends on the closing paren.
-  StmtResult
-  ParseOpenMPExecutableDirective(ParsedStmtContext StmtCtx,
-                                 OpenMPDirectiveKind DKind, SourceLocation Loc,
-                                 bool ReadDirectiveWithinMetadirective);
-
-  /// Parses informational directive.
-  ///
-  /// \param StmtCtx The context in which we're parsing the directive.
-  /// \param DKind The kind of the informational directive.
-  /// \param Loc Source location of the beginning of the directive.
-  /// \param ReadDirectiveWithinMetadirective true if directive is within a
-  /// metadirective and therefore ends on the closing paren.
-  StmtResult ParseOpenMPInformationalDirective(
-      ParsedStmtContext StmtCtx, OpenMPDirectiveKind DKind, SourceLocation Loc,
-      bool ReadDirectiveWithinMetadirective);
-
-  /// Parses clause of kind \a CKind for directive of a kind \a Kind.
-  ///
-  /// \verbatim
-  ///    clause:
-  ///       if-clause | final-clause | num_threads-clause | safelen-clause |
-  ///       default-clause | private-clause | firstprivate-clause |
-  ///       shared-clause | linear-clause | aligned-clause | collapse-clause |
-  ///       bind-clause | lastprivate-clause | reduction-clause |
-  ///       proc_bind-clause | schedule-clause | copyin-clause |
-  ///       copyprivate-clause | untied-clause | mergeable-clause | flush-clause
-  ///       | read-clause | write-clause | update-clause | capture-clause |
-  ///       seq_cst-clause | device-clause | simdlen-clause | threads-clause |
-  ///       simd-clause | num_teams-clause | thread_limit-clause |
-  ///       priority-clause | grainsize-clause | nogroup-clause |
-  ///       num_tasks-clause | hint-clause | to-clause | from-clause |
-  ///       is_device_ptr-clause | task_reduction-clause | in_reduction-clause |
-  ///       allocator-clause | allocate-clause | acq_rel-clause | acquire-clause
-  ///       | release-clause | relaxed-clause | depobj-clause | destroy-clause |
-  ///       detach-clause | inclusive-clause | exclusive-clause |
-  ///       uses_allocators-clause | use_device_addr-clause | has_device_addr
-  /// \endverbatim
-  ///
-  /// \param DKind Kind of current directive.
-  /// \param CKind Kind of current clause.
-  /// \param FirstClause true, if this is the first clause of a kind \a CKind
-  /// in current directive.
-  ///
-  OMPClause *ParseOpenMPClause(OpenMPDirectiveKind DKind,
-                               OpenMPClauseKind CKind, bool FirstClause);
-
-  /// Parses clause with a single expression of a kind \a Kind.
-  ///
-  /// Parsing of OpenMP clauses with single expressions like 'final',
-  /// 'collapse', 'safelen', 'num_threads', 'simdlen', 'num_teams',
-  /// 'thread_limit', 'simdlen', 'priority', 'grainsize', 'num_tasks', 'hint' or
-  /// 'detach'.
-  ///
-  /// \verbatim
-  ///    final-clause:
-  ///      'final' '(' expression ')'
-  ///
-  ///    num_threads-clause:
-  ///      'num_threads' '(' expression ')'
-  ///
-  ///    safelen-clause:
-  ///      'safelen' '(' expression ')'
-  ///
-  ///    simdlen-clause:
-  ///      'simdlen' '(' expression ')'
-  ///
-  ///    collapse-clause:
-  ///      'collapse' '(' expression ')'
-  ///
-  ///    priority-clause:
-  ///      'priority' '(' expression ')'
-  ///
-  ///    grainsize-clause:
-  ///      'grainsize' '(' expression ')'
-  ///
-  ///    num_tasks-clause:
-  ///      'num_tasks' '(' expression ')'
-  ///
-  ///    hint-clause:
-  ///      'hint' '(' expression ')'
-  ///
-  ///    allocator-clause:
-  ///      'allocator' '(' expression ')'
-  ///
-  ///    detach-clause:
-  ///      'detach' '(' event-handler-expression ')'
-  ///
-  ///    align-clause
-  ///      'align' '(' positive-integer-constant ')'
-  ///
-  ///    holds-clause
-  ///      'holds' '(' expression ')'
-  /// \endverbatim
-  ///
-  /// \param Kind Kind of current clause.
-  /// \param ParseOnly true to skip the clause's semantic actions and return
-  /// nullptr.
-  ///
-  OMPClause *ParseOpenMPSingleExprClause(OpenMPClauseKind Kind, bool ParseOnly);
-  /// Parses simple clause like 'default' or 'proc_bind' of a kind \a Kind.
-  ///
-  /// \verbatim
-  ///    default-clause:
-  ///         'default' '(' 'none' | 'shared' | 'private' | 'firstprivate' ')'
-  ///
-  ///    proc_bind-clause:
-  ///         'proc_bind' '(' 'master' | 'close' | 'spread' ')'
-  ///
-  ///    bind-clause:
-  ///         'bind' '(' 'teams' | 'parallel' | 'thread' ')'
-  ///
-  ///    update-clause:
-  ///         'update' '(' 'in' | 'out' | 'inout' | 'mutexinoutset' |
-  ///         'inoutset' ')'
-  /// \endverbatim
-  ///
-  /// \param Kind Kind of current clause.
-  /// \param ParseOnly true to skip the clause's semantic actions and return
-  /// nullptr.
-  ///
-  OMPClause *ParseOpenMPSimpleClause(OpenMPClauseKind Kind, bool ParseOnly);
-
-  /// Parse indirect clause for '#pragma omp declare target' directive.
-  ///  'indirect' '[' '(' invoked-by-fptr ')' ']'
-  /// where invoked-by-fptr is a constant boolean expression that evaluates to
-  /// true or false at compile time.
-  /// \param ParseOnly true to skip the clause's semantic actions and return
-  /// false;
-  bool ParseOpenMPIndirectClause(SemaOpenMP::DeclareTargetContextInfo &DTCI,
-                                 bool ParseOnly);
-  /// Parses clause with a single expression and an additional argument
-  /// of a kind \a Kind like 'schedule' or 'dist_schedule'.
-  ///
-  /// \verbatim
-  ///    schedule-clause:
-  ///      'schedule' '(' [ modifier [ ',' modifier ] ':' ] kind [',' expression ]
-  ///      ')'
-  ///
-  ///    if-clause:
-  ///      'if' '(' [ directive-name-modifier ':' ] expression ')'
-  ///
-  ///    defaultmap:
-  ///      'defaultmap' '(' modifier [ ':' kind ] ')'
-  ///
-  ///    device-clause:
-  ///      'device' '(' [ device-modifier ':' ] expression ')'
-  /// \endverbatim
-  ///
-  /// \param DKind Directive kind.
-  /// \param Kind Kind of current clause.
-  /// \param ParseOnly true to skip the clause's semantic actions and return
-  /// nullptr.
-  ///
-  OMPClause *ParseOpenMPSingleExprWithArgClause(OpenMPDirectiveKind DKind,
-                                                OpenMPClauseKind Kind,
-                                                bool ParseOnly);
-
-  /// Parses the 'looprange' clause of a '#pragma omp fuse' directive.
-  OMPClause *ParseOpenMPLoopRangeClause();
-
-  /// Parses the 'sizes' clause of a '#pragma omp tile' directive.
-  OMPClause *ParseOpenMPSizesClause();
-
-  /// Parses the 'counts' clause of a '#pragma omp split' directive.
-  OMPClause *ParseOpenMPCountsClause();
-
-  /// Parses the 'permutation' clause of a '#pragma omp interchange' directive.
-  OMPClause *ParseOpenMPPermutationClause();
-
-  /// Parses clause without any additional arguments like 'ordered'.
-  ///
-  /// \verbatim
-  ///    ordered-clause:
-  ///         'ordered'
-  ///
-  ///    nowait-clause:
-  ///         'nowait'
-  ///
-  ///    untied-clause:
-  ///         'untied'
-  ///
-  ///    mergeable-clause:
-  ///         'mergeable'
-  ///
-  ///    read-clause:
-  ///         'read'
-  ///
-  ///    threads-clause:
-  ///         'threads'
-  ///
-  ///    simd-clause:
-  ///         'simd'
-  ///
-  ///    nogroup-clause:
-  ///         'nogroup'
-  /// \endverbatim
-  ///
-  /// \param Kind Kind of current clause.
-  /// \param ParseOnly true to skip the clause's semantic actions and return
-  /// nullptr.
-  ///
-  OMPClause *ParseOpenMPClause(OpenMPClauseKind Kind, bool ParseOnly = false);
-
-  /// Parses clause with the list of variables of a kind \a Kind:
-  /// 'private', 'firstprivate', 'lastprivate',
-  /// 'shared', 'copyin', 'copyprivate', 'flush', 'reduction', 'task_reduction',
-  /// 'in_reduction', 'nontemporal', 'exclusive' or 'inclusive'.
-  ///
-  /// \verbatim
-  ///    private-clause:
-  ///       'private' '(' list ')'
-  ///    firstprivate-clause:
-  ///       'firstprivate' '(' list ')'
-  ///    lastprivate-clause:
-  ///       'lastprivate' '(' list ')'
-  ///    shared-clause:
-  ///       'shared' '(' list ')'
-  ///    linear-clause:
-  ///       'linear' '(' linear-list [ ':' linear-step ] ')'
-  ///    aligned-clause:
-  ///       'aligned' '(' list [ ':' alignment ] ')'
-  ///    reduction-clause:
-  ///       'reduction' '(' [ modifier ',' ] reduction-identifier ':' list ')'
-  ///    task_reduction-clause:
-  ///       'task_reduction' '(' reduction-identifier ':' list ')'
-  ///    in_reduction-clause:
-  ///       'in_reduction' '(' reduction-identifier ':' list ')'
-  ///    copyprivate-clause:
-  ///       'copyprivate' '(' list ')'
-  ///    flush-clause:
-  ///       'flush' '(' list ')'
-  ///    depend-clause:
-  ///       'depend' '(' in | out | inout : list | source ')'
-  ///    map-clause:
-  ///       'map' '(' [ [ always [,] ] [ close [,] ]
-  ///          [ mapper '(' mapper-identifier ')' [,] ]
-  ///          to | from | tofrom | alloc | release | delete ':' ] list ')';
-  ///    to-clause:
-  ///       'to' '(' [ mapper '(' mapper-identifier ')' ':' ] list ')'
-  ///    from-clause:
-  ///       'from' '(' [ mapper '(' mapper-identifier ')' ':' ] list ')'
-  ///    use_device_ptr-clause:
-  ///       'use_device_ptr' '(' list ')'
-  ///    use_device_addr-clause:
-  ///       'use_device_addr' '(' list ')'
-  ///    is_device_ptr-clause:
-  ///       'is_device_ptr' '(' list ')'
-  ///    has_device_addr-clause:
-  ///       'has_device_addr' '(' list ')'
-  ///    allocate-clause:
-  ///       'allocate' '(' [ allocator ':' ] list ')'
-  ///       As of OpenMP 5.1 there's also
-  ///         'allocate' '(' allocate-modifier: list ')'
-  ///         where allocate-modifier is: 'allocator' '(' allocator ')'
-  ///    nontemporal-clause:
-  ///       'nontemporal' '(' list ')'
-  ///    inclusive-clause:
-  ///       'inclusive' '(' list ')'
-  ///    exclusive-clause:
-  ///       'exclusive' '(' list ')'
-  /// \endverbatim
-  ///
-  /// For 'linear' clause linear-list may have the following forms:
-  ///  list
-  ///  modifier(list)
-  /// where modifier is 'val' (C) or 'ref', 'val' or 'uval'(C++).
-  ///
-  /// \param Kind Kind of current clause.
-  /// \param ParseOnly true to skip the clause's semantic actions and return
-  /// nullptr.
-  ///
-  OMPClause *ParseOpenMPVarListClause(OpenMPDirectiveKind DKind,
-                                      OpenMPClauseKind Kind, bool ParseOnly);
-
-  /// Parses a clause consisting of a list of expressions.
-  ///
-  /// \param Kind          The clause to parse.
-  /// \param ClauseNameLoc [out] The location of the clause name.
-  /// \param OpenLoc       [out] The location of '('.
-  /// \param CloseLoc      [out] The location of ')'.
-  /// \param Exprs         [out] The parsed expressions.
-  /// \param ReqIntConst   If true, each expression must be an integer constant.
-  ///
-  /// \return Whether the clause was parsed successfully.
-  bool ParseOpenMPExprListClause(OpenMPClauseKind Kind,
-                                 SourceLocation &ClauseNameLoc,
-                                 SourceLocation &OpenLoc,
-                                 SourceLocation &CloseLoc,
-                                 SmallVectorImpl<Expr *> &Exprs,
-                                 bool ReqIntConst = false);
-
-  /// Parses simple expression in parens for single-expression clauses of OpenMP
-  /// constructs.
-  /// \verbatim
-  /// <iterators> = 'iterator' '(' { [ <iterator-type> ] identifier =
-  /// <range-specification> }+ ')'
-  /// \endverbatim
-  ExprResult ParseOpenMPIteratorsExpr();
-
-  /// Parses allocators and traits in the context of the uses_allocator clause.
-  /// Expected format:
-  /// \verbatim
-  /// '(' { <allocator> [ '(' <allocator_traits> ')' ] }+ ')'
-  /// \endverbatim
-  OMPClause *ParseOpenMPUsesAllocatorClause(OpenMPDirectiveKind DKind);
-
-  /// Parses the 'interop' parts of the 'append_args' and 'init' clauses.
-  bool ParseOMPInteropInfo(OMPInteropInfo &InteropInfo, OpenMPClauseKind Kind);
-
-  /// Parses clause with an interop variable of kind \a Kind.
-  ///
-  /// \verbatim
-  /// init-clause:
-  ///   init([interop-modifier, ]interop-type[[, interop-type] ... ]:interop-var)
-  ///
-  /// destroy-clause:
-  ///   destroy(interop-var)
-  ///
-  /// use-clause:
-  ///   use(interop-var)
-  ///
-  /// interop-modifier:
-  ///   prefer_type(preference-list)
-  ///
-  /// preference-list:
-  ///   foreign-runtime-id [, foreign-runtime-id]...
-  ///
-  /// foreign-runtime-id:
-  ///   <string-literal> | <constant-integral-expression>
-  ///
-  /// interop-type:
-  ///   target | targetsync
-  /// \endverbatim
-  ///
-  /// \param Kind Kind of current clause.
-  /// \param ParseOnly true to skip the clause's semantic actions and return
-  /// nullptr.
-  //
-  OMPClause *ParseOpenMPInteropClause(OpenMPClauseKind Kind, bool ParseOnly);
-
-  /// Parses a ompx_attribute clause
-  ///
-  /// \param ParseOnly true to skip the clause's semantic actions and return
-  /// nullptr.
-  //
-  OMPClause *ParseOpenMPOMPXAttributesClause(bool ParseOnly);
-
-public:
-  /// Parses simple expression in parens for single-expression clauses of OpenMP
-  /// constructs.
-  /// \param RLoc Returned location of right paren.
-  ExprResult ParseOpenMPParensExpr(StringRef ClauseName, SourceLocation &RLoc,
-                                   bool IsAddressOfOperand = false);
-
-  /// Parses a reserved locator like 'omp_all_memory'.
-  bool ParseOpenMPReservedLocator(OpenMPClauseKind Kind,
-                                  SemaOpenMP::OpenMPVarListDataTy &Data,
-                                  const LangOptions &LangOpts);
-  /// Parses clauses with list.
-  bool ParseOpenMPVarList(OpenMPDirectiveKind DKind, OpenMPClauseKind Kind,
-                          SmallVectorImpl<Expr *> &Vars,
-                          SemaOpenMP::OpenMPVarListDataTy &Data);
-
-  /// Parses the mapper modifier in map, to, and from clauses.
-  bool parseMapperModifier(SemaOpenMP::OpenMPVarListDataTy &Data);
-
-  /// Parse map-type-modifiers in map clause.
-  /// map([ [map-type-modifier[,] [map-type-modifier[,] ...] [map-type] : ] list)
-  /// where, map-type-modifier ::= always | close | mapper(mapper-identifier) |
-  /// present
-  /// where, map-type ::= alloc | delete | from | release | to | tofrom
-  bool parseMapTypeModifiers(SemaOpenMP::OpenMPVarListDataTy &Data);
-
-  /// Parses 'omp begin declare variant' directive.
-  /// The syntax is:
-  /// \verbatim
-  /// { #pragma omp begin declare variant clause }
-  /// <function-declaration-or-definition-sequence>
-  /// { #pragma omp end declare variant }
-  /// \endverbatim
-  ///
-  bool ParseOpenMPDeclareBeginVariantDirective(SourceLocation Loc);
-
-  ///@}
-
-  //
-  //
-  // -------------------------------------------------------------------------
-  //
-  //
-
   /// \name Pragmas
   /// Implementations are in ParsePragma.cpp
   ///@{
@@ -7040,8 +5210,6 @@ private:
   std::unique_ptr<PragmaHandler> RedefineExtnameHandler;
   std::unique_ptr<PragmaHandler> FPContractHandler;
   std::unique_ptr<PragmaHandler> OpenCLExtensionHandler;
-  std::unique_ptr<PragmaHandler> OpenMPHandler;
-  std::unique_ptr<PragmaHandler> OpenACCHandler;
   std::unique_ptr<PragmaHandler> PCSectionHandler;
   std::unique_ptr<PragmaHandler> MSCommentHandler;
   std::unique_ptr<PragmaHandler> MSDetectMismatchHandler;
@@ -7062,7 +5230,6 @@ private:
   std::unique_ptr<PragmaHandler> MSOptimize;
   std::unique_ptr<PragmaHandler> MSFenvAccess;
   std::unique_ptr<PragmaHandler> MSAllocText;
-  std::unique_ptr<PragmaHandler> CUDAForceHostDeviceHandler;
   std::unique_ptr<PragmaHandler> OptimizeHandler;
   std::unique_ptr<PragmaHandler> LoopHintHandler;
   std::unique_ptr<PragmaHandler> UnrollHintHandler;
@@ -7233,15 +5400,13 @@ public:
     /// This context permits declarations in language modes where declarations
     /// are not statements.
     AllowDeclarationsInC = 0x1,
-    /// This context permits standalone OpenMP directives.
-    AllowStandaloneOpenMPDirectives = 0x2,
     /// This context is at the top level of a GNU statement expression.
-    InStmtExpr = 0x4,
+    InStmtExpr = 0x2,
 
     /// The context of a regular substatement.
     SubStmt = 0,
     /// The context of a compound-statement.
-    Compound = AllowDeclarationsInC | AllowStandaloneOpenMPDirectives,
+    Compound = AllowDeclarationsInC,
 
     LLVM_MARK_AS_BITMASK_ENUM(InStmtExpr)
   };
@@ -7672,8 +5837,6 @@ public:
   // 'for-init-statement' part of a 'for' statement.
   /// Returns true for declaration, false for expression.
   bool isForInitDeclaration() {
-    if (getLangOpts().OpenMP)
-      Actions.OpenMP().startOpenMPLoop();
     if (getLangOpts().CPlusPlus)
       return Tok.is(tok::kw_using) ||
              isCXXSimpleDeclaration(/*AllowForRangeDecl=*/true);
@@ -8234,15 +6397,11 @@ private:
   ///
   /// \param ConsumeLastToken if true, the '>' is consumed.
   ///
-  /// \param ObjCGenericList if true, this is the '>' closing an Objective-C
-  /// type parameter or type argument list, rather than a C++ template parameter
-  /// or argument list.
-  ///
   /// \returns true, if current token does not start with '>', false otherwise.
   bool ParseGreaterThanInTemplateList(SourceLocation LAngleLoc,
                                       SourceLocation &RAngleLoc,
                                       bool ConsumeLastToken,
-                                      bool ObjCGenericList);
+                                      bool AngleList);
 
   /// Parses a template-id that after the template name has
   /// already been parsed.
