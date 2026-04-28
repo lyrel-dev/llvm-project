@@ -5,6 +5,14 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
+//
+// NOTE: HLSL is no longer a supported language in this build. All code in
+// this file is dead (unreachable) because the frontend rejects HLSL inputs
+// in CompilerInvocation::ParseLangArgs(). This file is retained only to
+// satisfy the linker. See clang/docs/ReducedParser.md for the full cleanup
+// roadmap.
+//
+//===----------------------------------------------------------------------===//
 
 #include "clang/Lex/LexHLSLRootSignature.h"
 
